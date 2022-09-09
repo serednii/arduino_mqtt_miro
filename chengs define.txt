@@ -1,0 +1,3033 @@
+//works
+#include <ESP8266WiFi.h>
+#include <WiFiClient.h>
+#include <ESP8266WebServer.h>
+///////#include <ESP8266mDNS.h>
+#include <EEPROM.h>
+//#include <ESP8266HTTPClient.h>
+#include <PubSubClient.h> //mqtt
+// wifiMulti----
+#include <ESP8266WiFiMulti.h>
+
+//*****************************
+ESP8266WiFiMulti wifiMulti;
+#include <NTPClient.h>//Годинник
+#include <WiFiUdp.h>//Годинник
+WiFiUDP ntpUDP;
+// initialized to a time offset of 10 hours
+NTPClient timeClient(ntpUDP, "pool.ntp.org", 7200 , 60000);
+//  HH:MM:SS
+//******************************
+const String nameUser = "miro-benech";
+boolean connectedInternet = false;
+//#include <ArduinoJson.h>
+//DynamicJsonDocument doc(3400);
+// WiFi connect timeout per AP. Increase when connecting takes longer.
+const uint32_t connectTimeoutMs = 5000;
+
+void (*resetFunc)(void) = 0; // объявляем функцию reset
+//void readEeprom();
+//void readEepromAddress();
+//void readSensorsAddressTemp();
+
+//*-------------------------
+// add OneWire ds18b20 02.09.2019
+#include <OneWire.h>
+#include <DallasTemperature.h>
+// GPIO where the DS18B20 is connected to
+
+const byte PIN_DS18B20 = 14;
+const byte PIN_RELE_0 = 5;
+const byte PIN_RELE_1 = 4;
+const byte PIN_RELE_2 = 0;
+const byte PIN_RELE_3 = 2;
+const byte PIN_RELE_4 = 12;
+const byte PIN_RELE_5 = 13;
+const byte PIN_RELE_6 = 3;//3
+const byte PIN_RELE_7 = 1;//1
+const byte PIN_LED_KONTROL = 16;
+
+int oneWireBus = PIN_DS18B20;
+
+// Setup a oneWire instance to communicate with any OneWire devices
+OneWire oneWire(oneWireBus);
+
+// Pass our oneWire reference to Dallas Temperature sensor
+DallasTemperature sensors(&oneWire);
+
+int sensorPin = A0;    // select the input pin for the potentiometer
+
+const byte kilkistRele = 8;
+const byte numberConnectRouter = 6;
+byte releVsTemp = 0;
+int scanWifiTimer = 0;
+int tm = 300; // пауза між визовами TempSend();
+
+const char *mqtt_server = "broker.hivemq.com"; // Имя сервера MQTT
+const int mqtt_port = 1883;                    // Порт для подключения к серверу MQTT
+const char *mqtt_user = "";                    // Логин от сервер
+const char *mqtt_pass = "";                    // Пароль от сервера
+
+#define MQTT_MAX_PACKET_SIZE 1024
+WiFiClient wclient;
+PubSubClient client(wclient, mqtt_server, mqtt_port);
+
+// wifiMulti----
+//#ifndef STASSID
+//#define STASSID "your-ssid"
+//#define STAPSK  "your-password"
+//#endif
+
+IPAddress ip(192, 168, 0, 17); //статический IP
+IPAddress gateway(192, 168, 1, 1);
+IPAddress subnet(255, 255, 255, 0);
+const char *ssid1 = "DIR-825-8e26";
+const char *password1 = "Mdcvsww0805197922";
+
+#ifndef APSSID
+#define APSSID "ESPap"
+#define APPSK "thereisn"
+#endif
+
+/* Set these to your desired credentials. */
+const char *ssid = APSSID;
+const char *password = APPSK;
+ESP8266WebServer server(80);
+// MDNSResponder mdns;        //назначаем экземпляр класса ESP8266mDNS
+//////WiFiClient client;
+//////HTTPClient http;
+byte checkClientAccessPointRom = 255;
+int counterAnalogInput = 0;
+
+String form1_2;
+const int led = LED_BUILTIN;
+
+//--------------------------EEPROM---------------------------------
+
+
+#define NUMBER_RELE 8
+#define MAX_NUMBER_SENSOR 8
+#define MAX_LENNGTH_TEXT_NAME_RELE_AND_SENSOR  40
+
+
+//+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+//+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+//+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+#define LENGTH_ADRESS_CLIENT_OR_ACCESS_POINT 1 //байт в EEPROM де позначається режим client=0 або accees point>0
+#define LENGTH_STRING_NAME_DEVICE 40 //Строка де зберігаємо імя пристрою
+//логіни і паролі
+#define NUMBER_CLIENT_CONNECT 4
+#define LENGTH_SSID (10*2)
+#define LENGTH_PASSWORD (10*2)
+#define LENGTH_SECTION_SSID_ADN_PASSWORD  (LENGTH_SSID * NUMBER_CLIENT_CONNECT + LENGTH_PASSWORD * NUMBER_CLIENT_CONNECT)
+#define LENGTH_TEMP_ON_OFF (NUMBER_RELE * 2) //температура включеня Від -50 до 100 зміщаємо діапазон (-50градусів=0), (0градусів=50), (100градусів=150);
+// біт 0-3 номер датчика який управляє даним реле
+// біт 4 один або два діапазона контроля температрур
+// біт 5 вкл або викл реле при зміні температур або таймера
+// біт 6 стан реле при помилці термодатчмка
+#define LENGTH_RELE_EEPROM_SENSOR  NUMBER_RELE
+#define LENGTH_RELE_EEPROM_UPR  NUMBER_RELE  // біт 0 1-ручне або 0-від таймера чи термодатчика // біт 2 управління термодатчиком // біт 3,4,5,6,7 управління таймером
+#define LENGTH_SECTION_EEPROM_SENSOR_ADDRESS  MAX_NUMBER_SENSOR * 8 //зберігає адреса для 20 датчиків кожен датчик займає 8 байт від 281 до 441
+#define LENGTH_SECTION_EEPROM_SENSOR_NAME  MAX_NUMBER_SENSOR * MAX_LENNGTH_TEXT_NAME_RELE_AND_SENSOR
+#define LENGTH_SECTION_EEPROM_RELE_NAME  NUMBER_RELE * MAX_LENNGTH_TEXT_NAME_RELE_AND_SENSOR
+
+//(1084 + 252*8=3100)    byte  2byte-rik(2022-2099), 1byte-month(0-12), 1byte-day(1-31), 1byte-hour(0-23), 1byte-minute(0-59), 1byte-день тижня
+//TimeEeprom =  byte 1byte - hodyna, 1byte - minute
+//dayEeprom =  40 byte
+//delayStartReleEeprom = 4 byte (0-100000 sekund)
+#define LENGTH_SECTION_EEPROM_TIMERDATE  NUMBER_RELE * 252
+
+//+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+//+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+//+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+
+
+
+
+#define TOTAL_LENGTH_SECTION 0
+
+//****************************************************************
+//байт в EEPROM де позначається режим client=0 або accees point>0
+#define LENGTH_ADRESS_CLIENT_OR_ACCESS_POINT 1
+const int EEPROM_ADRESS_CLIENT_OR_ACCESS_POINT =  (TOTAL_LENGTH_SECTION);//байт в EEPROM де позначається режим client=0 або accees point>0
+
+
+//****************************************************************
+
+#define TOTAL_LENGTH_SECTION_100 (TOTAL_LENGTH_SECTION + LENGTH_ADRESS_CLIENT_OR_ACCESS_POINT)
+
+//****************************************************************
+//Строка де зберігаємо імя пристрою
+#define LENGTH_STRING_NAME_DEVICE 40
+const int EEPROM_ADRESS_STRING_NAME_DEVICE =  (TOTAL_LENGTH_SECTION_100);//байт в EEPROM де позначається режим client=0 або accees point>0
+
+
+//****************************************************************
+
+#define TOTAL_LENGTH_SECTION_150 (TOTAL_LENGTH_SECTION_100 + LENGTH_STRING_NAME_DEVICE)
+
+
+//****************************************************************
+//логіни і паролі
+#define NUMBER_CLIENT_CONNECT 4
+#define LENGTH_SSID (10*2)
+#define LENGTH_PASSWORD (10*2)
+#define LENGTH_SECTION_SSID_ADN_PASSWORD  (LENGTH_SSID * NUMBER_CLIENT_CONNECT + LENGTH_PASSWORD * NUMBER_CLIENT_CONNECT)
+const int START_SECTION_EEPROM_SSID_AND_PASSWORD = (TOTAL_LENGTH_SECTION_150);
+String arraySsidInput[NUMBER_CLIENT_CONNECT];     //для логінів
+String arrayPasswordInput[NUMBER_CLIENT_CONNECT]; //для паролів
+String arraySsid[NUMBER_CLIENT_CONNECT];     //для логінів
+String arrayPassword[NUMBER_CLIENT_CONNECT]; //для паролів
+
+//****************************************************************
+
+#define TOTAL_LENGTH_SECTION_200 (TOTAL_LENGTH_SECTION_150 + LENGTH_SECTION_SSID_ADN_PASSWORD)
+
+//****************************************************************
+//температура включеня Від -50 до 100 зміщаємо діапазон (-50градусів=0), (0градусів=50), (100градусів=150);
+#define LENGTH_TEMP_ON_OFF (NUMBER_RELE * 2)
+const int START_SECTION_EEPROM_TEMP_ON_OFF = (TOTAL_LENGTH_SECTION_200);//температура включеня Від -50 до 100 зміщаємо діапазон (-50градусів=0), (0градусів=50), (100градусів=150);
+//****************************************************************
+//****************************************************************
+
+#define TOTAL_LENGTH_SECTION_300 (TOTAL_LENGTH_SECTION_200 + LENGTH_TEMP_ON_OFF)
+
+//****************************************************************
+// біт 0-3 номер датчика який управляє даним реле
+// біт 4 один або два діапазона контроля температрур
+// біт 5 вкл або викл реле при зміні температур або таймера
+// біт 6 стан реле при помилці термодатчмка
+#define LENGTH_RELE_EEPROM_SENSOR  NUMBER_RELE
+const int START_SECTION_RELE_EEPROM_SENSOR = (TOTAL_LENGTH_SECTION_300);
+
+
+//****************************************************************
+
+#define TOTAL_LENGTH_SECTION_400 (TOTAL_LENGTH_SECTION_300 + LENGTH_RELE_EEPROM_SENSOR)
+
+//****************************************************************
+
+#define LENGTH_RELE_EEPROM_UPR  NUMBER_RELE
+const int START_SECTION_RELE_EEPROM_UPR = (TOTAL_LENGTH_SECTION_400);
+//const int rele_0_eprom_upr = 273; // біт 0 1-ручне або 0-від таймера чи термодатчика // біт 2 управління термодатчиком // біт 3,4,5,6,7 управління таймером
+
+
+//****************************************************************
+
+#define TOTAL_LENGTH_SECTION_500 (TOTAL_LENGTH_SECTION_400 + LENGTH_RELE_EEPROM_UPR)
+
+//****************************************************************
+#define LENGTH_SECTION_EEPROM_SENSOR_ADDRESS  MAX_NUMBER_SENSOR * 8
+const int START_SECTION_EEPROM_SENSOR_ADDRESS = (TOTAL_LENGTH_SECTION_5);
+//boolean flagRele = true;
+//зберігає адреса для 20 датчиків кожен датчик займає 8 байт від 281 до 441
+//****************************************************************
+
+#define TOTAL_LENGTH_SECTION_600 (TOTAL_LENGTH_SECTION_500 + LENGTH_SECTION_EEPROM_SENSOR_ADDRESS)
+
+//****************************************************************
+#define LENGTH_SECTION_EEPROM_SENSOR_NAME  MAX_NUMBER_SENSOR * MAX_LENNGTH_TEXT_NAME_RELE_AND_SENSOR
+const int START_SECTION_EEPROM_SENSOR_NAME = (TOTAL_LENGTH_SECTION_600);
+//const int sensorNameEEprom = 442; //442 + 8*40 = 762
+//8 imen по 40 байт
+//****************************************************************
+
+#define TOTAL_LENGTH_SECTION_700 (TOTAL_LENGTH_SECTION_600 + LENGTH_SECTION_EEPROM_SENSOR_NAME)
+
+//****************************************************************
+#define LENGTH_SECTION_EEPROM_RELE_NAME  NUMBER_RELE * MAX_LENNGTH_TEXT_NAME_RELE_AND_SENSOR
+const int START_SECTION_EEPROM_RELE_NAME = (TOTAL_LENGTH_SECTION_700);
+//const int releNameEEprom = 763; //763 + 8*40 = 1083
+//8 imen по 40 байт
+
+//****************************************************************
+
+#define TOTAL_LENGTH_SECTION_800 (TOTAL_LENGTH_SECTION_700 + LENGTH_SECTION_EEPROM_RELE_NAME)
+
+//****************************************************************
+#define LENGTH_SECTION_EEPROM_TIMERDATE  NUMBER_RELE * 252
+const int START_SECTION_EEPROM_TIMERDATE = (TOTAL_LENGTH_SECTION_800);
+//const int timerDateEeprom = 1084;// (1084 + 252*8=3100)    byte  2byte-rik(2022-2099), 1byte-month(0-12), 1byte-day(1-31), 1byte-hour(0-23), 1byte-minute(0-59), 1byte-день тижня
+//TimeEeprom =  byte 1byte - hodyna, 1byte - minute
+//dayEeprom =  40 byte
+//delayStartReleEeprom = 4 byte (0-100000 sekund)
+//****************************************************************
+
+#define TOTAL_LENGTH_SECTION_900 (TOTAL_LENGTH_SECTION_800 + LENGTH_SECTION_EEPROM_TIMERDATE)
+
+
+
+
+
+
+int symbolStart = 0;
+int symbolEnd = 0;
+
+class Rele // название класса
+{
+  public:
+    String nameRele; //імя реле
+    byte onOffManual; //при ручному режимі реле включено чи виключено
+    byte numberPin;           //номер піна до якого підключено реле
+    byte numberSensorControl; // номер датчика який управляє даним реле
+    byte manualAuto;            // вкл або виключено
+    byte termoControl;     // Буде чи ні реле керуватися термодатчиком
+    byte timerControl;        // Якщо 0 то реле не контролюється таймером, якщо 1 то контролюємо
+    byte bit4OneOrTwoRange;  //1-два діапазона температур включенн і відключеня 0-один діапазон температур  включення або відключення
+    byte bit5OnOffChange; //при переключенні реле включається або виключається
+    byte bit6ReleError; //при несправності термодатчика або неможливість управляти таймером реле залишаємо вкл 1 або відключеним -0
+    boolean errorSensor; //Якщо пропав датчик флаг ставимо в true
+    boolean flagsTermo;//  якщо спрацювала умова включення для термодатчика
+    boolean flagsTimer;//  якщо спрацювала умова включення для таймера
+    boolean flagsDelaystart;// якщо є затримка при включенні
+};
+Rele releControl[8];
+
+class timerDate {
+  public:
+    word delaySecondStart;
+    unsigned long data_datamiliseconds[10];
+    word data_rik[10];
+    byte data_months[10];
+    byte data_dey[10];
+    byte data_godyna[10];
+    byte data_minut[10];
+    byte data_daywikend[10];
+    byte godyna[50];
+    byte minut[50];
+    byte dey[35];
+};
+timerDate dataAndTime[8];
+
+
+
+
+
+
+//------------------------------------------------------------------------------
+int deviceCountSensor; //КІЛЬКІСТЬ ПІДКЛЮЧЕНИХ ДАТЧИКІВ
+class Sensor           // название класса
+{
+  public:
+    String nameSensor;
+    byte number;
+    String strAddress;
+    float temp;
+    int tempVkl;
+    int tempOtkl;
+};
+Sensor ds18b20[10];
+Sensor ds18b20EEprom[10];
+
+
+
+
+//Week Days
+String weekDays[7] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+//Month names
+String months[12] = {"January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"};
+class GetDate {
+  public:
+    time_t epochTime;
+    String formattedTime;
+    int currentHour;
+    int currentMinute;
+    int currentSecond;
+    int weekDayNumber;
+    String weekDay;
+    int monthDay;
+    int currentMonth;
+    String currentMonthName;
+    int currentYear;
+    String currentDate;
+};
+GetDate getDate;
+
+
+//------------------------------------------------------------------------------
+//#include "declaration.h"
+////#include "zminni.h"
+////#include "init.h"
+////#include "addFunction.h"
+//#include "callBack.h"
+//#include "contrTemp.h"
+const String eyaOpen = "<svg xmlns=\" viewBox=\"0 0 20 20\"><path d=\"M.2 10a11 11 0 0 1 19.6 0A11 11 0 0 1 .2 10zm9.8 4a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0-2a2 2 0 1 1 0-4 2 2 0 0 1 0 4z\"/></svg>";
+const String eyaClose = "<svg xmlns=\" viewBox=\"0 0 20 20\"><path d=\"M12.81 4.36l-1.77 1.78a4 4 0 0 0-4.9 4.9l-2.76 2.75C2.06 12.79.96 11.49.2 10a11 11 0 0 1 12.6-5.64zm3.8 1.85c1.33 1 2.43 2.3 3.2 3.79a11 11 0 0 1-12.62 5.64l1.77-1.78a4 4 0 0 0 4.9-4.9l2.76-2.75zm-.25-3.99l1.42 1.42L3.64 17.78l-1.42-1.42L16.36 2.22z\"/></svg>";
+//.password-control {cursor: pointer;position: absolute;top:28px;right: 10px;display: inline-block;width: 20px;height: 20px;background: url(https://snipp.ru/demo/495/view.svg) 0 0 no-repeat;}\
+//
+//                .password-control.view {background: url(https://snipp.ru/demo/495/no-view.svg) 0 0 no-repeat;}.input-ssid {margin-bottom: 5px;} .ssid-items__active {background-color: brown;}\
+//-----------------------------------------------------------------------------
+const String head = "<!DOCTYPE html><html><head><meta charset=\"utf-8\" /><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" /><!-- <meta http-equiv=\"X-UA-Compatible\" content=\"ie=edge\" /> --><title>ESP8266 Web Server POST handling</title>";
+//const String pageStyles = "<style>\
+//body{background-color: #cccccc;font-family: Arial, Helvetica, Sans-Serif;Color: #000088;position: relative;}\
+//.scan-wifi {position: relative;max-width: 400px;margin: 0 auto;padding: 15px;background-color: rgb(32, 223, 223);border: 1px solid #000088;border-radius: 20px;padding: 10px;transition: margin 0.5s ;}\
+//.scan__closed {position: absolute;display: none;right: 10px;top: -5px;font-size: 45px;font-weight: 900;cursor: pointer;transition: color 0.3s;}\
+//a{text-decoration: none;border: 1px solid ;padding: 5px;background-color: antiquewhite;border-radius: 10px;}\
+//.scan-wifi_list {margin: 10px 0;border: 1px solid #000000;background-color:#cccccc;border-radius: 5px;padding: 2px 10px;font-size: 20px;}\
+//.scan-wifi__active .scan-wifi_list {background-color:burlywood;cursor: pointer;}\
+//.connect p{text-align:center;padding:0;margin:3px;}\
+//.scan-wifi__active .scan__closed {display: block;}.container {max-width: 500px;margin: 0 auto;padding:10px 15px;}.main-title {text-align:center;margin: 0 auto;}\
+//.input {line-height: 2;}.btn1 {border-radius: 5px;background-color: lightcoral;cursor: pointer;line-height: 2;}.link-box {text-align: center;margin: 30px 0;}\
+//.input-pass{padding-right:30px;}.link {color: inherit;padding: 0;text-transform: uppercase;margin: 0 20px;height: auto;width: 150px;}\
+//.form-ssid {margin:0 auto;padding: 10px;max-width: 450px;display: grid;grid-template-columns: 1fr;gap: 20px;}.ssid-items {display: flex;background-color: aquamarine;padding: 5px;}\
+//.ssid-items__input {min-width: 230px;display: flex;flex-direction: column;margin-right: 20px;position: relative;}\
+//.password-control {cursor: pointer;position: absolute;top:40px;right: 10px;display: inline-block;width: 20px;height: 20px;background: url(https://snipp.ru/demo/495/view.svg) 0 0 no-repeat;}\
+//.password-control.view {background: url(https://snipp.ru/demo/495/no-view.svg) 0 0 no-repeat;}.input-ssid {margin-bottom: 5px;} .ssid-items__active {background-color: brown;}\
+//.add-ssid, .clear-ssid {background-color: coral;line-height: 2;border-radius: 10px;padding: 0 5px;width: 150px;cursor: pointer;text-align: center;margin-bottom: 5px;}\
+//.clear-ssid__check {margin-top: 10px;}.add-ssid:active {background-color: blue;}\
+//.popap {position: fixed;top: -400px;left: -400px;background-color: chartreuse;width: 300px;padding: 10px 0;transition: top 0.5s, left 0.5s;}\
+//.popap-active {top: 20px;left: 20px;}.popap__list {margin: 40px 20px 20px 20px;padding: 0;}\
+//.popap__item {list-style: none;padding: 0 10px ;margin:  5px;line-height: 1.5;background-color: crimson;border-radius: 10px;cursor: pointer;}\
+//.popap__item:focus {background-color:darkcyan;}.popap__closed {position: absolute;right: 10px;top: -5px;font-size: 45px;font-weight: 900;cursor: pointer;transition: color 0.3s;}\
+//.popap__closed:hover {color: red;}\
+//.reset {position: absolute;top: 15px;left: 50px;} .connect-server, .connect-router {position: absolute;right: 50px;top: 15px;}.disable {display: none;}\
+//.scan-wifi__title {color: red;text-align: center;font-size: 1rem;padding: 0;margin: 0;padding-top: 50px;}\
+//</style>";
+
+const String pageStyles = "<style>\
+body{background-color: #cccccc;font-family: Arial, Helvetica, Sans-Serif;Color: #000088;position: relative;}\
+.scan-wifi {position: relative;max-width: 400px;margin: 0 auto;padding: 15px;background-color: rgb(32, 223, 223);border: 1px solid #000088;border-radius: 20px;padding: 10px;transition: margin 0.5s ;}\
+.scan__closed {position: absolute;display: none;right: 10px;top: -5px;font-size: 45px;font-weight: 900;cursor: pointer;transition: color 0.3s;}\
+a{text-decoration: none;border: 1px solid ;padding: 5px;background-color: antiquewhite;border-radius: 10px;}\
+.scan-wifi_list {margin: 10px 0;border: 1px solid #000000;background-color:#cccccc;border-radius: 5px;padding: 2px 10px;font-size: 20px;}\
+.scan-wifi__active .scan-wifi_list {background-color:burlywood;cursor: pointer;}\
+.connect p{text-align:center;padding:0;margin:3px;}\
+.scan-wifi__active .scan__closed {display: block;}.container {max-width: 500px;margin: 0 auto;padding:10px 15px;}.main-title {text-align:center;margin: 0 auto;}\
+.input {line-height: 2;}.btn1 {border-radius: 5px;background-color: lightcoral;cursor: pointer;line-height: 2;}.link-box {text-align: center;margin: 30px 0;}\
+.input-pass{padding-right:30px;}.link {color: inherit;padding: 0;text-transform: uppercase;margin: 0 20px;height: auto;width: 150px;}\
+.form-ssid {margin:0 auto;padding: 10px;max-width: 450px;display: grid;grid-template-columns: 1fr;gap: 20px;}.ssid-items {display: flex;background-color: aquamarine;padding: 5px;}\
+.ssid-items__input {min-width: 230px;display: flex;flex-direction: column;margin-right: 20px;position: relative;}.ssid-items__active {background-color: brown;}\
+.add-ssid, .clear-ssid {background-color: coral;line-height: 2;border-radius: 10px;padding: 0 5px;width: 150px;cursor: pointer;text-align: center;margin-bottom: 5px;}\
+.clear-ssid__check {margin-top: 10px;}.add-ssid:active {background-color: blue;}\
+.popap {position: fixed;top: -400px;left: -400px;background-color: chartreuse;width: 300px;padding: 10px 0;transition: top 0.5s, left 0.5s;}\
+.popap-active {top: 20px;left: 20px;}.popap__list {margin: 40px 20px 20px 20px;padding: 0;}\
+.popap__item {list-style: none;padding: 0 10px ;margin:  5px;line-height: 1.5;background-color: crimson;border-radius: 10px;cursor: pointer;}\
+.popap__item:focus {background-color:darkcyan;}.popap__closed {position: absolute;right: 10px;top: -5px;font-size: 45px;font-weight: 900;cursor: pointer;transition: color 0.3s;}\
+.popap__closed:hover {color: red;}\
+.reset {position: absolute;top: 15px;left: 50px;} .connect-server, .connect-router {position: absolute;right: 50px;top: 15px;}.disable {display: none;}\
+.scan-wifi__title {color: red;text-align: center;font-size: 1rem;padding: 0;margin: 0;padding-top: 50px;}\
+</style>";
+
+const String pageBody_1 = "</head><body>";
+const String pageBody_2 = "<div class=\"container\"><div class=\"scan-wifi\">\
+ <div class=\"scan__closed\">X</div>\
+<p class=\"scan-wifi__title\">Доступні мережі-Available networks-Dostupné sítě</p>\
+<div class=\"scan-wifi__inner\">\
+<a class=\"reset\" href=\"/\">Update</a>";
+const String form1_3 = "</div>";
+const String pageForm_1 = "</div></div><div class=\"container\"><div class=\"connect\">\
+<p>Список зарегістрованих роутерів</p>\
+<p>List of registered routers</p>\
+<p>Seznam registrovaných routerů</p>\
+<form class=\"form-ssid\" method=\"post\" enctype=\"application/x-www-form-urlencoded\" action=\"router\">";
+//
+//const String items1_1 = "<div class=\"ssid-items\">\
+//<div class=\"ssid-items__input\">\
+//<input class=\"input input-ssid\" type=\"text\" name=\"SSID-";
+//const String items1_2 = "\" maxlength=\"";
+//const String items1_3 = "\" value=\"";
+//const String items1_4 = "\"  placeholder=\"Enter your SSID\">\
+//<input class=\"input input-pass\" type=\"text\" name=\"Passowrd-";
+//const String items1_5 = "\" maxlength=\"";
+//const String items1_6 = "\" value=\"";
+//const String items1_7 = "\" placeholder=\"Enter your PASSWORD\">\
+//<p class=\"password-control\"></p>\
+//</div>\
+//<div class=\"ssid-items__btn\">\
+//<div class=\"add-ssid\">Add a router</div>\
+//<div class=\"clear-ssid\"> Clear data</div>\
+//</div>\
+//</div>";
+//
+//
+
+
+const String end_form = "<input class=\"btn1\" type=\"submit\" value=\"Save\">\
+</form></div></div>";
+
+
+
+const String pageScript_1 = "<script>{\
+document.querySelectorAll('.password-control').forEach(function(e){\
+e.addEventListener('click',function(){\
+const typePass = e.closest('.ssid-items__input').querySelector('.input-pass');\
+if(typePass.getAttribute('type') == 'password'){\
+typePass.setAttribute('type', 'text');\
+e.classList.add('view');\
+}else{\
+typePass.setAttribute('type', 'password');\
+e.classList.remove('view');\
+}\
+});\
+});\
+}</script>";
+
+//const String pageScript_1 = "";
+
+const String pageScript_2 = "<script>let ssidd;\
+let passs;\
+let activSSid;\
+document.querySelectorAll('.clear-ssid').forEach(function (e) {\
+e.addEventListener('click', function() {\
+e.closest('.ssid-items').querySelector('.input-pass').value = '';\
+e.closest('.ssid-items').querySelector('.input-ssid').value = '';\
+});\
+});\
+document.querySelectorAll('.scan-wifi_list').forEach(function(e){\
+e.addEventListener('click', function() {\
+ssidd.value = e.innerHTML;\
+passs.value = '';\
+e.focus();\
+});\
+});\
+document.querySelectorAll('.add-ssid').forEach(function (e) {\
+e.addEventListener('click', function () {\
+ssidd=  e.closest('.ssid-items').querySelector('.input-ssid');\
+passs = e.closest('.ssid-items').querySelector('.input-pass');\
+activSSid = e.closest('.ssid-items');\
+e.closest('.ssid-items').classList.add('ssid-items__active');\
+document.querySelector('.scan-wifi').classList.add('scan-wifi__active');\
+});\
+}); \
+document.querySelector('.scan__closed').addEventListener('click', function(){\
+activSSid.classList.remove('ssid-items__active');\
+activSSid = null;\
+ssidd=null;\
+passs=null;\
+document.querySelector('.scan-wifi').classList.remove('scan-wifi__active');\
+});</script>";
+
+const String endBody = "</body></html>";
+
+const String pageClient = "<!DOCTYPE html><html><head> <meta charset=\"utf-8\" /><title>ESP8266 Web Server POST handling</title>\
+<style>\
+body{background-color: #cccccc;font-family: Arial, Helvetica, Sans-Serif;Color: #000088;position: relative;}\
+</style>\
+</head><body>\
+  <p class=\"main-title\">Пристрій перейшов в режим клієнта.</p>\
+<p class=\"main-title\">Він автоматично підключеться до найкращого по сигналу роутера</p>\
+<p class=\"main-title\">Якщо підключення буде неуспішне повторіть процедуру</p>\
+<p class=\"main-title\">The device has entered client mode..</p>\
+<p class=\"main-title\">It will automatically connect to the router with the best signal</p>\
+<p class=\"main-title\">if the connection is unsuccessful, repeat the procedure</p>\
+<p class=\"main-title\">Zařízení vstoupilo do klientského režimu.</p>\
+<p class=\"main-title\">Automaticky se připojí k routeru s nejlepším signálem</p>\
+<p class=\"main-title\">pokud je připojení neúspěšné, opakujte postup</p>\
+</body></html>";
+
+const String pageAccessPoint = "<!DOCTYPE html><html><head> <meta charset=\"utf-8\" /><title>ESP8266 Web Server POST handling</title>\
+<style>\
+body{background-color: #cccccc;font-family: Arial, Helvetica, Sans-Serif;Color: #000088;position: relative;}\
+</style>\
+</head><body>\
+<p class=\"main-title\">Пристрій перейшов в режим точки доступа. Access Point</p>\
+<p class=\"main-title\">Підключіться до роутера з іменем ESPap</p>\
+<p class=\"main-title\">Введіть ip address http://192.168.4.1/</p>\
+<p class=\"main-title\">Виберіть доступні роутери, введіть пароль і збережіть його</p>\
+<p class=\"main-title\">Після цього натисніть кнопку Переходимо в режим клієнт</p>\
+<p class=\"main-title\">The device has entered access point mode. Access Point</p>\
+<p class=\"main-title\">Connect to the router with the name ESPap</p>\
+<p class=\"main-title\">Input ip address http://192.168.4.1/</p>\
+<p class=\"main-title\">Select the available routers, enter the password and save it</p>\
+<p class=\"main-title\">After that, click the Let's switch to client mode button</p>\
+<p class=\"main-title\">Zařízení vstoupilo do režimu přístupového bodu.. Access Point</p>\
+<p class=\"main-title\">Připojte se k routeru se jménem ESPap</p>\
+<p class=\"main-title\">Vstupte ip address http://192.168.4.1/</p>\
+<p class=\"main-title\">Vyberte dostupné routery, zadejte heslo a uložte jej</p>\
+<p class=\"main-title\">Poté klikněte na tlačítko Přepněte do klientského režimu</p>\
+</body></html>";
+
+
+
+void homePage()
+{
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "text/html", head);
+  server.sendContent(pageStyles);
+  server.sendContent(pageBody_1);
+
+  if (EEPROM.read(EEPROM_ADRESS_CLIENT_OR_ACCESS_POINT) > 0)
+  { // client
+    server.sendContent("<div class=\"container\"><h1 class=\"main-title\">Виберіть роутери для підключення</h1><br></div>");
+  }
+  else
+  {
+    server.sendContent("\
+<p class=\"main-title\">Пристрій в режимі точки доступа. ACCESS POINT</p>\
+<p class=\"main-title\">Виберіть доступні роутери, введіть пароль і збережіть</p>\
+<p class=\"main-title\">Після цього натисніть кнопку Переходимо в режим клієнт</p>\
+<p class=\"main-title\">The device is in access point mode ACCESS POINT</p>\
+<p class=\"main-title\">Select the available routers, enter the password and save</p>\
+<p class=\"main-title\">After that, click the Let's switch to client mode button</p>\
+<p class=\"main-title\">Zařízení je v režimu přístupového bodu. ACCESS POINT</p>\
+<p class=\"main-title\">Vyberte dostupné routery, zadejte heslo a uložte</p>\
+<p class=\"main-title\">Poté klikněte na tlačítko Přepněte do klientského režimu</p>\
+<br>");
+  }
+
+  server.sendContent(pageBody_2);
+
+  if (EEPROM.read(EEPROM_ADRESS_CLIENT_OR_ACCESS_POINT) > 0)
+  { // client
+    //  if (checkClientAccessPointRom > 0) { //client
+    server.sendContent("<a href=\"checkedAccesPoint\" class=\"connect-server\">Switch to server mode</a>");
+  }
+  else
+  {
+    server.sendContent("<a href =\"checkedClient\" class=\"connect-router\">Switch to client mode</a>");
+  }
+  server.sendContent(form1_3);
+  server.sendContent(form1_2);
+  server.sendContent(pageForm_1);
+
+  for (byte i = 1; i <= NUMBER_CLIENT_CONNECT; i++ ) {
+    String newSsidString = "<div class=\"ssid-items\"><div class=\"ssid-items__input\"><input class=\"input input-ssid\" type=\"text\" name=\"SSID-";
+    newSsidString += String(i);
+    newSsidString += "\" maxlength=\"";
+    newSsidString += String(LENGTH_SSID);
+    newSsidString += "\" value=\"";
+    newSsidString += arraySsid[i - 1];
+    newSsidString += "\"  placeholder=\"Enter your SSID\"><input class=\"input input-pass\" type=\"text\" name=\"Passowrd-";
+    newSsidString += String(i);
+    newSsidString += "\" maxlength=\"";
+    newSsidString += String(LENGTH_PASSWORD);
+    newSsidString += "\" value=\"";
+    newSsidString += arrayPassword[i - 1];
+    newSsidString += "\" placeholder=\"Enter your PASSWORD\">\
+<p class=\"password-control\"></p>\
+</div>\
+<div class=\"ssid-items__btn\">\
+<div class=\"add-ssid\">Add a router</div>\
+<div class=\"clear-ssid\"> Clear data</div>\
+</div>\
+</div>";
+
+    server.sendContent(newSsidString);
+  }
+
+  server.sendContent(end_form);
+
+  server.sendContent(pageScript_1);
+  server.sendContent(pageScript_2);
+  //server.sendContent(pageScript_3);
+  server.sendContent(endBody);
+}
+
+//--------------------------------------------------
+
+void handleRoot()
+{
+  readEeprom();
+  scanWifi();
+  homePage();
+}
+
+//--------------------------------------------------
+
+void router()
+{
+  if (server.method() != HTTP_POST)
+  {
+    // digitalWrite(led, 1);
+    server.send(405, "text/plain", "Method Not Allowed");
+    // digitalWrite(led, 0);
+  }
+  else
+  {
+    // digitalWrite(led, 1);
+    String message = "POST form was:\n";
+    String message1;
+    for (uint8_t i = 0; i < server.args(); i++)
+    {
+      message1 += " " + server.argName(i) + ": " + server.arg(i) + "\n";
+    }
+    Serial.println(message1);
+    //    Serial.println();
+    //    Serial.println();
+    int xx = message1.indexOf(" plain: SSID-1") - 1;
+    // Serial.println("------------------------------------------------------------------------------");
+    // Serial.println(message1);
+    // Serial.println("------------------------------------------------------------------------------");
+    message1 = message1.substring(0, xx); //Відкидаємо першу половину строки
+    Serial.println(message1);
+    Serial.println("------------------------------------------------------------------------------");
+
+    for (int i = 1; i <= NUMBER_CLIENT_CONNECT; i++)
+    { //Розбираємо строку на пароль і логін
+      int n1 = message1.indexOf("SSID-" + String(i));
+      int n2 = message1.indexOf("Passowrd-" + String(i));
+
+      arraySsidInput[i - 1] = message1.substring(n1 + 8, n2 - 2); //Записуємо SSID
+      n1 = message1.indexOf("SSID-" + String(i + 1));
+
+      if (i == NUMBER_CLIENT_CONNECT) { //Записуємо паролі
+        Serial.println(message1.substring(n2 + 12));
+        arrayPasswordInput[i - 1] = message1.substring(n2 + 12);
+      } else {
+        Serial.println(message1.substring(n2 + 12, n1 - 2));
+        arrayPasswordInput[i - 1] = message1.substring(n2 + 12, n1 - 2);
+      }
+    }
+
+    writeEeprom();
+    readEeprom();
+    scanWifi();
+    homePage();
+  }
+}
+
+void router_two()
+{
+  if (server.method() != HTTP_POST)
+  {
+    digitalWrite(led, 1);
+    server.send(405, "text/plain", "Method Not Allowed");
+    digitalWrite(led, 0);
+  }
+  else
+  {
+    digitalWrite(led, 1);
+    String message = "POST form was:\n";
+    String message1;
+    for (uint8_t i = 0; i < server.args(); i++)
+    {
+      message1 += " " + server.argName(i) + ": " + server.arg(i) + "\n";
+    }
+    Serial.print("messageTest -- ");
+    Serial.println(message1);
+    message += message1;
+    server.send(200, "text/plain", message);
+    digitalWrite(led, 0);
+  }
+}
+
+void handleNotFound()
+{
+  digitalWrite(led, 1);
+  String message = "File Not Found\n\n";
+  message += "URI: ";
+  message += server.uri();
+  message += "\nMethod: ";
+  message += (server.method() == HTTP_GET) ? "GET" : "POST";
+  message += "\nArguments: ";
+  message += server.args();
+  message += "\n";
+  String message2;
+  for (uint8_t i = 0; i < server.args(); i++)
+  {
+    message2 += " " + server.argName(i) + ": " + server.arg(i) + "\n";
+  }
+  // Serial.print("message2 -- ");
+  // Serial.println(message2);
+  message += message2;
+  server.send(404, "text/plain", message);
+  digitalWrite(led, 0);
+}
+
+//************************************************************************************************************************************************************************
+//************************************************************************************************************************************************************************
+//**********************************************************************************SETUP*******************************************************************************
+//************************************************************************************************************************************************************************
+//************************************************************************************************************************************************************************
+
+//----------------------SETUP---------------------
+
+void setup()
+{
+  // const char *hexstring = "af";
+  // uint8_t number = (uint8_t)strtol(hexstring, NULL, 16);
+
+  sensors.begin();
+  delay(1000);
+  EEPROM.begin(4096);
+  Serial.begin(1000000);
+  timeClient.begin();//Годинник
+  releControl[0].numberPin = PIN_RELE_0;
+  releControl[1].numberPin = PIN_RELE_1;
+  releControl[2].numberPin = PIN_RELE_2;
+  releControl[3].numberPin = PIN_RELE_3;
+  releControl[4].numberPin = PIN_RELE_4;
+  releControl[5].numberPin = PIN_RELE_5;
+  releControl[6].numberPin = PIN_RELE_6;
+  releControl[7].numberPin = PIN_RELE_7;
+
+  //defineDevice();
+
+  //  clearEepromDate();
+
+  refreshobjectToJsonDate();
+
+  for (int i = 0; i < kilkistRele; i++) {
+    pinMode(releControl[i].numberPin, OUTPUT);
+    digitalWrite(releControl[i].numberPin, HIGH);
+  }
+  pinMode(PIN_LED_KONTROL, OUTPUT);
+  digitalWrite(PIN_LED_KONTROL, HIGH);
+
+
+  ////////////Serial.println();
+  Serial.print("sizeof(LENGTH_SECTION_SSID_ADN_PASSWORD)  ");
+  Serial.println(LENGTH_SECTION_SSID_ADN_PASSWORD);
+
+
+
+
+
+
+  //#define NUMBER_CLIENT_CONNECT 4
+  //#define LENGTH_SSID (10*2)
+  //#define LENGTH_PASSWORD (10*2)
+  //#define LENGTH_SECTION_SSID_ADN_PASSWORD  (LENGTH_SSID * NUMBER_CLIENT_CONNECT + LENGTH_PASSWORD * NUMBER_CLIENT_CONNECT)
+  //const int START_SECTION_EEPROM_SSID_AND_PASSWORD = (TOTAL_LENGTH_SECTION_1);
+  //
+
+
+
+//
+//  for (int i = 1, ii = 0, iii = 0; i < LENGTH_SECTION_SSID_ADN_PASSWORD; i++, ii++, iii++) {
+//
+//    if (ii == LENGTH_SSID) {
+//      ii = 0;
+//      Serial.println("   ");
+//    }
+//
+//    //      if (iii == 256) {
+//    //        iii = 0;
+//    //        Serial.println();
+//    //        Serial.println();
+//    //      }
+//
+//    Serial.print(i);
+//    Serial.print("--");
+//    Serial.print(EEPROM.read(i));
+//    Serial.print("--");
+//    Serial.print((char)EEPROM.read(i));
+//    Serial.print("   ");
+//
+//  }
+
+  //  for (int i = 0; i < 240; i++) {
+  //    EEPROM.write(i, 0);
+  //  }
+
+  //  EEPROM.write(rele_0_eprom_pin, 0b11100000);
+  //  EEPROM.write(rele_1_eprom_pin, 0b11100010);
+  //  EEPROM.write(rele_2_eprom_pin, 0b11100100);
+  //  EEPROM.write(rele_3_eprom_pin, 0b11100101);
+  //    EEPROM.write(rele_4_eprom_pin, 0b11110000);
+  //    EEPROM.write(rele_5_eprom_upr, 0b11110000);
+  //    EEPROM.write(rele_6_eprom_upr, 0b11110000);
+  //    EEPROM.write(rele_7_eprom_upr, 0b11110000);
+
+  //  for (int i = 0; i < 8; i++) {
+  //    EEPROM.write(START_SECTION_RELE_EEPROM_SENSOR + i, 0b00001111);
+  //  }
+
+  //  comitEprom();
+
+
+  //  Serial.println(strtol(hexstring, NULL, 16));
+  //  Serial.println("number   ");
+  //  Serial.println(number);
+  readEepromAddress(); //читаємо address з памяті ЕЕПРОМ  в обєкт ds18b20EEprom
+  refreshData();
+
+  //при старті
+  // EEPROM.write(EEPROM_ADRESS_CLIENT_OR_ACCESS_POINT, 255);
+  // comitEprom();
+  // Serial.println("connect to client--");
+  Serial.print("EEPROM_ADRESS_CLIENT_OR_ACCESS_POINT: ");
+  Serial.println(EEPROM.read(EEPROM_ADRESS_CLIENT_OR_ACCESS_POINT));
+  //  Serial.println(checkClientAccessPointRom);
+
+
+
+
+
+  //-------------------------------------------------------------------------------
+  if (EEPROM.read(EEPROM_ADRESS_CLIENT_OR_ACCESS_POINT) == 0) { //точка доступа
+    /* Create a WiFi access point and provide a web server on it. */
+    WiFi.softAP(ssid, password);
+    Serial.println();
+    Serial.print("Configuring access point...");
+    IPAddress myIP = WiFi.softAPIP();
+    Serial.print("AP IP address: ");
+    Serial.println(myIP);
+    Serial.print("-4 ");
+    connectedInternet = false;
+    digitalWrite(PIN_LED_KONTROL, HIGH);
+  }
+  else if (EEPROM.read(EEPROM_ADRESS_CLIENT_OR_ACCESS_POINT) > 0) { // client
+    //  if (true) { // client
+
+    //***************************************************
+    WiFi.persistent(false); // multi
+    Serial.println("\n ESP8266 Multi WiFi example");
+    // WiFi.mode(WIFI_OFF);
+    //  Set WiFi to station mode
+    WiFi.mode(WIFI_STA);
+    wifiMulti.addAP("DIR-825-8e26", "Mdcvsww0805197922");
+    wifiMulti.addAP("Mira", "8660024230");
+    wifiMulti.addAP("Benesovi", "8660024230");
+    wifiMulti.addAP("SIAP2", "@rFv753ZhN$159iK@");
+    readEeprom();
+    char Buf[20];
+    char Buf1[20];
+    digitalWrite(PIN_LED_KONTROL, LOW);
+    // Register multi WiFi networks
+    for (int i = 0; i < 6; i++)
+    {
+      arraySsid[i].toCharArray(Buf, 20);
+      arrayPassword[i].toCharArray(Buf1, 20);
+      wifiMulti.addAP(Buf, Buf1);
+
+      Serial.print("ssid: ");
+      Serial.print(i);
+      Serial.print("  ");
+      Serial.print(Buf);
+
+      Serial.print("pasword: ");
+      Serial.print(i);
+      Serial.print("  ");
+      Serial.print(Buf1);
+    }
+
+    byte counterConnect = 0;
+    while (wifiMulti.run(connectTimeoutMs) != WL_CONNECTED)
+    {
+      Serial.print("-3 ");
+      connectedInternet = false;
+      ledBlink(5, 250);
+      kontr_temp();
+      Serial.print(".");
+      //      if (counterConnect > 2)
+      //      { //Якщо нема підключення переходимо в режим точки доступа
+      //        EEPROM.write(EEPROM_ADRESS_CLIENT_OR_ACCESS_POINT, 0); //переходимо в точку доступа
+      //        //        checkClientAccessPointRom = 0;
+      //        comitEprom();
+      //        Serial.println("connect to acess point");
+      //        //        WiFi.disconnect(true);
+      //        //        setup();
+      //        resetFunc(); //вызываем reset
+      //      }
+      counterAnalogInput += 650;
+      analoReadA0();
+    }
+
+    Serial.println("");
+    Serial.print("WiFi connected: ");
+    Serial.print(WiFi.SSID());
+    Serial.print(" ");
+    Serial.println(WiFi.localIP());
+    // WiFi.softAPdisconnect (true);
+    Serial.print("-2");
+    connectedInternet = true;
+  }
+  //---------------------------------------------------------------------------------------
+
+  //назначаем символьное имя mDNS нашему серверу опираясь на его динамически полученный IP
+  //  if (MDNS.begin("esp8266", WiFi.localIP())) {
+  //    Serial.println("MDNS responder started");
+  //  }
+
+  //******************************************************
+
+  server.on("/checkedClient", []() {
+    EEPROM.write(EEPROM_ADRESS_CLIENT_OR_ACCESS_POINT, 255);
+    checkClientAccessPointRom = 255;
+    comitEprom();
+    Serial.println("connect to Client");
+    server.send(200, "text/html", pageClient);
+    delay(500);
+    //    WiFi.disconnect(true);
+    //    setup();
+    resetFunc(); //вызываем reset });
+  });
+
+  server.on("/checkedAccesPoint", []() {
+    EEPROM.write(EEPROM_ADRESS_CLIENT_OR_ACCESS_POINT, 0);
+    checkClientAccessPointRom = 0;
+    comitEprom();
+    Serial.println("connect to Access Point");
+    server.send(200, "text/html", pageAccessPoint);
+    delay(500);
+    //    WiFi.disconnect(true);
+    //    setup();
+    resetFunc(); //вызываем reset });
+  });
+  server.on("/", handleRoot);
+  server.on("/router/", router);
+  server.onNotFound(router);
+  server.begin();
+
+  Serial.println("HTTP server started");
+  // MDNS.addService("http", "tcp", 80); //ставимо свій IP address
+}
+
+
+//---------------------------------------------------------------------
+void loop(void)
+{
+  server.handleClient();
+  analoReadA0();
+
+
+
+  //************************************
+
+
+
+  if (EEPROM.read(EEPROM_ADRESS_CLIENT_OR_ACCESS_POINT) > 0)  // client
+    if (WiFi.status() != WL_CONNECTED)
+    {
+
+      if (wifiMulti.run(connectTimeoutMs) == WL_CONNECTED)
+      {
+        String ssid = WiFi.SSID();
+        String localip = WiFi.localIP().toString();
+        Serial.print("WiFi connected: ");
+        Serial.print(ssid);
+        Serial.print(" ");
+        Serial.println(localip);
+        Serial.print("-1 ");
+        connectedInternet = true;
+      }
+      else
+      {
+        Serial.println("WiFi not connected!");
+        Serial.print("0 ");
+        connectedInternet = false;
+        ledBlink(8, 250);
+        kontr_temp();
+        counterAnalogInput += 650;
+        analoReadA0();
+      }
+    }
+  //    else {
+
+
+  String ssid;
+  String localip;
+  if (tm == 0)
+  {
+    if (EEPROM.read(EEPROM_ADRESS_CLIENT_OR_ACCESS_POINT) > 0)  // client
+      if (WiFi.status() == WL_CONNECTED)
+      {
+        ssid = WiFi.SSID();
+        localip = WiFi.localIP().toString();
+        Serial.print("WiFi CONNECTED: ");
+        Serial.print(ssid);
+        Serial.print(" ");
+        Serial.println(localip);
+        Serial.print("1 ");
+        connectedInternet = true;
+        if (client.connect(MQTT::Connect(nameUser + "_ceske-budejovice")
+                           .set_auth(mqtt_user, mqtt_pass)))
+        {
+          Serial.println("2powerx/Connected to MQTT server");
+          client.set_callback(callback);
+          //          client.subscribe(nameUser + "_rele-0");
+          //          client.subscribe(nameUser + "_rele-1");
+          //          client.subscribe(nameUser + "_rele-2");
+          //          client.subscribe(nameUser + "_rele-3");
+          //          client.subscribe(nameUser + "_rele-4");
+          //          client.subscribe(nameUser + "_rele-5");
+          //          client.subscribe(nameUser + "_rele-6");
+          client.subscribe(nameUser + "_rele-temp");
+          client.subscribe(nameUser + "_rele-all");
+          client.subscribe(nameUser + "_start-data-sensor-eepromAndDevice");
+          client.subscribe(nameUser + "_deviceSensorData");
+          client.subscribe(nameUser + "_eepromSensorData");
+          client.subscribe(nameUser + "_save-data-sensor-eeprom");
+          client.subscribe(nameUser + "_flagRele");
+          client.subscribe(nameUser + "_rele_eprom_upr-set_number_sensor");
+          client.subscribe(nameUser + "_rele_eprom_upr-set_erorr_rele_vkl_vukl");
+          client.subscribe(nameUser + "_rele_eprom_upr-set_one_or_two_range_temp");
+          client.subscribe(nameUser + "_rele_eprom_upr-set_change_on_or_off");
+          client.subscribe(nameUser + "_save-name-sensor-eeprom");
+          client.subscribe(nameUser + "_save-rele-name");
+          client.subscribe(nameUser + "_rele-get-eprom_upr-manual");
+          client.subscribe(nameUser + "_set-rele-vkl-otkl");
+          client.subscribe(nameUser + "_set-rele-data-time");
+          client.subscribe(nameUser + "_save-data-sensor-temp");
+          client.subscribe(nameUser + "_define_device");
+          client.subscribe(nameUser + "_resetFunction");
+          client.subscribe(nameUser + "_get_name_device");
+//          client.subscribe(nameUser + "_define_device");
+//          client.subscribe(nameUser + "_define_device");
+//          client.subscribe(nameUser + "_define_device");
+//          client.subscribe(nameUser + "_define_device");
+//          client.subscribe(nameUser + "_define_device");
+
+
+          client.publish(nameUser + "_ssid", ssid); // отправляем в топик для термодатчика значение температуры
+          client.publish(nameUser + "_ip", localip); // отправляем в топик для термодатчика значение температуры
+        }
+        else
+        {
+          Serial.println("2powerx/Could not connect to MQTT server");
+        }
+      }
+    tm = 500; // пауза між визовами TempSend();
+    Serial.println("Miro Benech");
+    client.publish(nameUser + "_ssid", ssid); // отправляем в топик для термодатчика значение температуры
+    client.publish(nameUser + "_ip", localip); // отправляем в топик для термодатчика значение температуры
+    kontr_temp();
+
+
+  }
+
+  tm--;
+  delay(10);
+
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    // Serial.println("client.loop");
+    client.loop();
+  }
+  //    }
+}
+
+//-------------------------------------------------------------------------------------------------------------------------------
+//-------------------------------------------------------------------------------------------------------------------------------
+//-------------------------------------------------------------------------------------------------------------------------------
+//-------------------------------------------------------------------------------------------------------------------------------
+
+void scanWifi()
+{
+  String ssid;
+  int32_t rssi;
+  uint8_t encryptionType;
+  uint8_t *bssid;
+  int32_t channel;
+  bool hidden;
+  int scanResult;
+
+  Serial.println(F("Starting WiFi scan..."));
+
+  scanResult = WiFi.scanNetworks(/*async=*/false, /*hidden=*/true);
+
+  if (scanResult == 0)
+  {
+    Serial.println(F("No networks found"));
+  }
+  else if (scanResult > 0)
+  {
+    Serial.printf(PSTR("%d networks found:\n"), scanResult);
+    // <p class=\"scan-wifi_list\">rbsrt</p>\
+
+    // Print unsorted scan results
+    form1_2 = "";
+    for (int8_t i = 0; i < scanResult; i++)
+    {
+      WiFi.getNetworkInfo(i, ssid, encryptionType, rssi, bssid, channel, hidden);
+      form1_2 += "<p class=\"scan-wifi_list\">";
+
+      form1_2 += ssid.c_str();
+      form1_2 += "</p>";
+      Serial.printf(PSTR("  %02d: [CH %02d] [%02X:%02X:%02X:%02X:%02X:%02X] %ddBm %c %c %s\n"),
+                    i,
+                    channel,
+                    bssid[0], bssid[1], bssid[2],
+                    bssid[3], bssid[4], bssid[5],
+                    rssi,
+                    (encryptionType == ENC_TYPE_NONE) ? ' ' : '*',
+                    hidden ? 'H' : 'V',
+                    ssid.c_str());
+      delay(0);
+    }
+  }
+  else
+  {
+    Serial.printf(PSTR("WiFi scan error %d"), scanResult);
+  }
+}
+
+void comitEprom()
+{
+  if (EEPROM.commit())
+  {
+    Serial.println("EEPROM successfully committed");
+  }
+  else
+  {
+    Serial.println("ERROR! EEPROM commit failed");
+  }
+}
+
+//********************WRITE EEPROM****************************
+void writeEeprom()
+{
+
+  String ssidTemp, passTemp;
+  int sectionEeprom = START_SECTION_EEPROM_SSID_AND_PASSWORD;
+
+  for (int i = 0; i < NUMBER_CLIENT_CONNECT; i++)
+  {
+    ssidTemp = arraySsidInput[i];
+    passTemp = arrayPasswordInput[i];
+    Serial.print("passTemp  ");
+    Serial.println(passTemp);
+    Serial.print("ssidTemp  ");
+    Serial.println(ssidTemp);
+
+
+    for (int j = 0; j < LENGTH_SSID; j++)
+    {
+      if (j < ssidTemp.length())
+      {
+        EEPROM.write(j + sectionEeprom, ssidTemp[j]); //Записуємо в память ssid
+      }
+      else
+      {
+        EEPROM.write(j + sectionEeprom, 0);
+      }
+    }
+
+
+    for (int j = LENGTH_SSID; j < LENGTH_SSID + LENGTH_PASSWORD; j++)
+    {
+      if (j - LENGTH_SSID < passTemp.length())
+      {
+        EEPROM.write(j + sectionEeprom, passTemp[j - LENGTH_SSID]); //Записуємо в память password
+      }
+      else
+      {
+        EEPROM.write(j + sectionEeprom, 0);
+      }
+    }
+
+
+    sectionEeprom += LENGTH_SSID + LENGTH_PASSWORD;
+  }
+
+  comitEprom();
+}
+//********************WRITE EEPROM*****************************
+
+//*************************************************************************************************************************************************
+
+//********************READ EEPROM******************************
+void readEeprom()
+{
+  int sectionEeprom = START_SECTION_EEPROM_SSID_AND_PASSWORD;
+  //-----------------------------------------
+
+  for (int i = 0; i < NUMBER_CLIENT_CONNECT; i++)
+  {
+    arraySsid[i] = "";
+    arrayPassword[i] = "";
+
+    for (int j = 0; j < LENGTH_SSID; j++)
+    {
+      byte ss = EEPROM.read(j + sectionEeprom);
+      if (!(ss == 0))arraySsid[i] += char(ss);
+    }
+
+
+    for (int j = LENGTH_SSID; j < LENGTH_SSID + LENGTH_PASSWORD; j++)
+    {
+      byte pas = EEPROM.read(j + sectionEeprom);
+      if (!(pas == 0))arrayPassword[i] += char(pas);
+    }
+
+
+
+    sectionEeprom += LENGTH_SSID + LENGTH_PASSWORD;
+  }
+}
+//*******************READ EEPROM****************************
+
+//*******************ADD FORM****************************
+
+
+
+
+
+
+
+//--------------------------------------callback--------------------------------
+//-----------------------------------------------------------------------------
+//boolean blockGetMessega = false;
+void callback(const MQTT::Publish & pub) //було
+{
+  Serial.print(pub.topic()); // выводим в сериал порт название топика
+  Serial.print(" => ");
+  Serial.println(pub.payload_string()); // выводим в сериал порт значение полученных данных
+  String payload = pub.payload_string();
+
+
+  //=================================================================================
+  if (String(pub.topic()) == nameUser + "_resetFunction") // перегрузка чипа
+  {
+    if (payload == "resetFunction")
+      resetFunc(); //вызываем reset });
+  }
+  //=================================================================================
+
+
+  //=================================================================================
+  if (String(pub.topic()) == nameUser + "_define_device") // міняєм імя пристрою
+  {
+    //    if(payload == "setDefineDevice"){
+    //    Serial.print("GET mesage setDefineDevice  ----  ");
+    //    Serial.println(payload);
+    defineDevice();
+    //    }
+//    return;
+  }
+  ////=================================================================================
+
+
+  //=================================================================================
+  if (String(pub.topic()) == nameUser + "_get_name_device") // получаєм нове імя приистрою
+  {
+    //    EEPROM_ADRESS_NAME_DEVICE
+   if (payload.length()>0 && payload.length()<20){
+   }
+
+  }
+  //=================================================================================
+
+  //  //=================================================================================
+
+  if (String(pub.topic()) == nameUser + "_set-rele-data-time") //прийом дати і часу
+  {
+    //    Serial.println("payload  ");
+    //    Serial.print(payload);
+
+
+
+    symbolStart = payload.indexOf('RELE') + 3;
+    symbolEnd = payload.indexOf('-');
+    String s2 = payload.substring(symbolStart, symbolEnd ); //номер реле
+    int  numrele = s2.toInt();
+    Serial.println("STRAT");
+    Serial.print("numrele   ");
+    Serial.println(numrele);
+
+    symbolStart = symbolEnd;
+    symbolEnd = payload.indexOf('-', symbolStart + 1);
+    s2 = payload.substring(symbolStart + 1, symbolEnd ); //Затримка в секундах для включення реле
+    Serial.print("delaysecondstart   ");
+    Serial.println(s2.toInt());
+
+    dataAndTime[numrele].delaySecondStart = s2.toInt();
+
+    for (int i = 0; i < 10; i++) {
+
+      unsigned long temp = nextElement(payload);
+      //      Serial.print(temp);
+      //      Serial.print("  ");
+      if (temp >= 0)dataAndTime[numrele].data_datamiliseconds[i] = temp;
+
+      temp = nextElement(payload);
+      //      Serial.print(temp);
+      //      Serial.print("  ");
+      if (temp >= 0)dataAndTime[numrele].data_rik[i] = temp;
+
+      temp = nextElement(payload);
+      //      Serial.print(temp);
+      //      Serial.print("  ");
+      if (temp >= 0)dataAndTime[numrele].data_months[i] = temp;
+
+      temp = nextElement(payload);
+      //      Serial.print(temp);
+      //      Serial.print("  ");
+      if (temp >= 0)dataAndTime[numrele].data_dey[i] = temp;
+
+      temp = nextElement(payload);
+      //      Serial.print(temp);
+      //      Serial.print("  ");
+      if (temp >= 0)dataAndTime[numrele].data_godyna[i] = temp;
+
+      temp = nextElement(payload);
+      //      Serial.print(temp);
+      //      Serial.print("  ");
+      if (temp >= 0)dataAndTime[numrele].data_minut[i] = temp;
+
+      temp = nextElement(payload);
+      //      Serial.println(temp);
+      if (temp >= 0)dataAndTime[numrele].data_daywikend[i] = temp;
+    }
+
+    //    Serial.println();
+    //    Serial.println();
+
+    for (int i = 0; i < 50; i++) {
+      int temp = nextElement(payload);
+      //      Serial.print(temp);
+      //      Serial.print("  ");
+      if (temp >= 0)dataAndTime[numrele].godyna[i] = temp;
+      temp = nextElement(payload);
+      //      Serial.println(temp);
+      if (temp >= 0)dataAndTime[numrele].minut[i] = temp;
+    }
+
+    for (int i = 0; i < 35; i++) {
+      int temp = nextElement(payload);
+      //      Serial.print(temp);
+      if (temp >= 0)dataAndTime[numrele].dey[i] = temp;
+    }
+
+    //    Serial.println("*******33333333333333333333************");
+
+    //    printObjectTime();
+    EEPROM.put(START_SECTION_EEPROM_TIMERDATE + (sizeof(timerDate)*numrele), dataAndTime[numrele]); //write objeck to EEPROM
+    comitEprom();
+    readEEPROMTimerToObjeckt();
+
+    //    Serial.println("-----------------44444444444444444444---------");
+    //    printObjectTime();
+
+    //    Serial.println("++++++++++++555555555555555555+++++++++++");
+    //    Serial.println(objectToJsonDate(dataAndTime[numrele], numrele));
+    for (byte numPak = 1; numPak < 5; numPak++)
+      client.publish(nameUser + "_out-web-rele-data-time", objectToJsonDate(dataAndTime[numrele], numrele, numPak));
+
+    //    return;
+  }
+  //=================================================================================
+
+
+  //=================================================================================
+  if (String(pub.topic()) == nameUser + "_start-data-sensor-eepromAndDevice") // при запросі відправити в топік адреса EEPROM i реальних датчиків
+  {
+    //    if (!blockGetMessega) {
+    //      blockGetMessega == true;
+    refreshData();
+    if (payload == "readAddressSensor" || payload == "ALL")
+    {
+      uint64_t address = 0;
+      String strAddress = "";
+      String s;
+
+      readEepromAddress(); //читаємо address з памяті ЕЕПРОМ  в обєкт ds18b20EEprom
+      //---------------------------------------------------------------------
+      //Якщо в памяті є записаний реальний мас адрес датчика то присвоюємо йому температуру датчика
+      readSensorsAddressTemp(); //читаємо в обєкт адреса і температуру датчиків
+      for (int i = 0; i < 8; i++)
+      {
+        for (int k = 0; k < deviceCountSensor; k++)
+        {
+          if (ds18b20EEprom[i].strAddress == ds18b20[k].strAddress)
+          {
+            ds18b20EEprom[i].temp = ds18b20[k].temp;
+            break;
+          }
+        }
+      }
+
+
+      //формуємо в формат JSON дані з памяті EEPROM і відправляємо в топік
+
+      client.publish(nameUser + "_eepromSensorData", objectToJSON(ds18b20EEprom, 8));
+      Serial.println(objectToJSON(ds18b20EEprom, 8));
+
+      //формуємо в формат JSON дані з датчиків температури  і відправляємо в топік
+
+      client.publish(nameUser + "_deviceSensorData", objectToJSON(ds18b20, deviceCountSensor));
+      Serial.println(objectToJSON(ds18b20, deviceCountSensor));
+//      return;
+    }
+
+    //-------------------------------------------------------------------------
+    if (payload == "releControl" || payload == "ALL")
+    {
+      //      refreshData();
+      String s = "{\"obj\":[";
+      for (int i = 0; i < 8; i++)
+      {
+        s += "{\"number\": " + String(EEPROM.read(START_SECTION_RELE_EEPROM_SENSOR + i)) + "}" + (i < 8 - 1 ? "," : "");
+      }
+      s += "]}";
+      client.publish(nameUser + "_rele_eprom_upr", s);
+
+
+      //      return;
+    }
+
+    //-------------------------------------------------------------------------
+    if (payload == "ReadTempVklOtkl" || payload == "ALL" )
+    {
+      //      refreshData();
+      //        kontr_temp();
+      String s = "{\"obj\":[";
+      for (int i = 0; i < 8; i++)
+      {
+        s += "{\"vkl\": " + String(EEPROM.read(START_SECTION_EEPROM_TEMP_ON_OFF + i * 2) - 50) + "," + "\"otkl\": " + String(EEPROM.read(START_SECTION_EEPROM_TEMP_ON_OFF + i * 2 + 1) - 50) + "}" + (i < 8 - 1 ? "," : "");
+      }
+      s += "]}";
+      client.publish(nameUser + "_sensor-vkl-otkl", s);
+
+      refreshobjectToJsonDate();
+      //      return;
+    }
+
+    //-------------------------------------------------------------------------
+    if (payload == "NameSensor" || payload == "ALL")
+    {
+      //        refreshData();
+
+      String s = "{\"obj\":[";
+      for (int i = 0; i < 8; i++)
+      {
+        s +=  "{\"nameSensor\": " + String("\"" + ds18b20EEprom[i].nameSensor + "\"")  + "}" + (i < 8 - 1 ? "," : "");
+      }
+      s += "]}";
+      client.publish(nameUser + "_sensor-name", s);
+      //        Serial.println(nameUser + "_sensor-name  ---- ");
+      //        Serial.println(s);
+      //      return;
+    }
+
+    //-------------------------------------------------------------------------
+    if (payload == "NameRele" || payload == "ALL")
+    {
+      String s = "{\"obj\":[";
+      for (int i = 0; i < 8; i++)
+      {
+        s += "{\"nameRele\": " + String("\"" + releControl[i].nameRele + "\"") + "}" + (i < 8 - 1 ? "," : "");
+      }
+      s += "]}";
+      client.publish(nameUser + "_rele-name", s);
+      //        Serial.println(nameUser + "_rele-name  ---- ");
+      //        Serial.println(s);
+      //return;
+    }
+
+    //-------------------------------------------------------------------------
+    if (payload == "ReleManual" || payload == "ALL")
+    {
+      String  s = "{\"obj\":[";
+      for (int i = 0; i < 8; i++)
+      {
+        s += "{\"namberRele\": "  + String(releControl[i].manualAuto)  + "}" + (i < 8 - 1 ? "," : "");
+      }
+      s += "]}";
+      //        Serial.print("ReleManual");
+      //        Serial.println(s);
+      client.publish(nameUser + "_rele-out-eprom_upr-manual", s);
+      //return;
+    }
+
+    //    }
+    //    blockGetMessega == false;
+    //return;
+  }
+  //=================================================================================
+
+  //=================================================================================
+
+  if (String(pub.topic()) == nameUser + "_save-data-sensor-temp") // проверяем из нужного ли нам топика пришли данные
+  {
+    // 0v255o255k START_SECTION_EEPROM_TEMP_ON_OFF температуру вкл і відкл  для термодатчика
+
+    //    Serial.println(payload);
+    String s = payload.substring(0, payload.indexOf('v')); //номер термодатчика
+    String s1 = payload.substring(payload.indexOf('v') + 1, payload.indexOf('o')); //перша температура
+    String s2 = payload.substring(payload.indexOf('o') + 1, payload.indexOf('k')); //друга температура
+    int a = s.toInt() * 2 + START_SECTION_EEPROM_TEMP_ON_OFF;
+    EEPROM.write(a, s1.toInt() + 50);
+    EEPROM.write(a + 1, s2.toInt() + 50);
+    comitEprom();
+    //    Serial.print("********");
+    //    Serial.println(a);
+    //    Serial.println(a + 1);
+    //    Serial.println(s.toInt());
+    //    Serial.println(s1.toInt());
+    //    Serial.println(s2.toInt());
+    refreshData();
+    kontr_temp();
+
+    client.publish(nameUser + "_start-data-sensor-eepromAndDevice", "ReadTempVklOtkl");
+    Serial.print("Send mesage ReadTempVklOtkl");
+    //    for (int i = 241; i < 257; i++) {
+    //      Serial.print(i);
+    //      Serial.print("--");
+    //      Serial.print(EEPROM.read(i));
+    //      Serial.print("--");
+    //      Serial.println((char)EEPROM.read(i));
+    //    }
+    //return;
+  }
+  //=================================================================================
+
+  //=================================================================================
+
+  if (String(pub.topic()) == nameUser + "_save-rele-name") // проверяем из нужного ли нам топика пришли данные
+  {
+    const byte kilkistyBukv = 20;
+    // 0vname1k START_SECTION_EEPROM_RELE_NAME //Зберігаємо імя реле
+
+    //    Serial.println(payload);
+    String s = payload.substring(0, payload.indexOf('v')); //номер реле
+    String s1 = payload.substring(payload.indexOf('v') + 1, payload.indexOf('k')); //імя реле
+    int address = s.toInt() * kilkistyBukv + START_SECTION_EEPROM_RELE_NAME;
+
+    for (int k = 0; k < kilkistyBukv; k++)
+    {
+
+      if (k < s1.length()) {
+        String cc = s1.substring(k, k + 1);
+        //        Serial.print("cccc  ");
+        //        Serial.print(cc);
+        //        Serial.print("  adddr  ");
+        //        Serial.println(address + k);
+        char char_array[2];
+        cc.toCharArray(char_array, 2);
+        EEPROM.write(address + k, (byte)char_array[0]);
+      } else {
+        EEPROM.write(address + k, 0);
+      }
+    }
+    comitEprom();
+
+    client.publish(nameUser + "_start-data-sensor-eepromAndDevice", "NameRele");
+    Serial.print("Send mesage NameRele");
+    //843-1003
+    //    for (int i = 843; i < 1003; i++) {
+    //      Serial.print(i);
+    //      Serial.print("--");
+    //      Serial.print(EEPROM.read(i));
+    //      Serial.print("--");
+    //      Serial.print((char)EEPROM.read(i));
+    //      Serial.print("--");
+    //      Serial.println(EEPROM.read(i));
+    //    }
+    readEepromNameRele();
+    //return;
+  }
+  //=================================================================================
+
+  //=================================================================================
+  if (String(pub.topic()) == nameUser + "_rele-get-eprom_upr-manual") // проверяем из нужного ли нам топика пришли данные
+  {
+    // 0x2k START_SECTION_RELE_EEPROM_UPR Ручний або автоматичний режим
+    String s = payload.substring(0, payload.indexOf('x')); //номер реле
+    String s1 = payload.substring(payload.indexOf('x') + 1, payload.indexOf('k')); //Ручний або автоматичний режим 1 або 0
+    int a = s.toInt() + START_SECTION_RELE_EEPROM_UPR;
+    byte temp = EEPROM.read(a);
+    temp &= ~0b00000001;//reset bit 0
+    temp = temp + (s1.toInt());
+    EEPROM.write(a, temp);
+    comitEprom();
+    temp = EEPROM.read(a);
+    if (s1.toInt() == 1)manual_vklOtkl(0, s.toInt());
+    refreshData();
+    kontr_temp();
+    //    for (int i = START_SECTION_RELE_EEPROM_UPR; i < START_SECTION_RELE_EEPROM_UPR + 8; i++) {
+    //      Serial.print(i);
+    //      Serial.print("--");
+    //      Serial.print(EEPROM.read(i));
+    //      Serial.print("--");
+    //      Serial.print((char)EEPROM.read(i));
+    //      Serial.print("--++++++++++++++++");
+    //      Serial.println(EEPROM.read(i), BIN);
+    //    }
+    s = "{\"obj\":[";
+    for (int i = 0; i < 8; i++)
+    {
+      s += "{\"namberRele\": "  + String(releControl[i].manualAuto)  + "}" + (i < 8 - 1 ? "," : "");
+    }
+    s += "]}";
+    //    Serial.print("Send mesage upr-manual");
+    //    Serial.println(s);
+    client.publish(nameUser + "_rele-out-eprom_upr-manual", s);
+    //return;
+  }
+  //=================================================================================
+
+  //=================================================================================
+  if (String(pub.topic()) == nameUser + "_set-rele-vkl-otkl") // проверяем из нужного ли нам топика пришли данные
+  {
+    //0x2k START_SECTION_RELE_EEPROM_UPR //Включаєм і виключаєм реле в ручному режимі
+    String s = payload.substring(0, payload.indexOf('x')); //номер реле
+    String s1 = payload.substring(payload.indexOf('x') + 1, payload.indexOf('k')); //Включаєм або вииключаємо реле
+    int i = s.toInt();
+    int b = s1.toInt();
+    //    Serial.print("i /////////  ");
+    //    Serial.print(i);
+    //    Serial.print("b ///////  ");
+    //    Serial.print(b);
+
+    //    if (b == 0) { //Виключаємо реле
+    //      releControl[i].onOffManual = 0;
+    //      digitalWrite(releControl[i].numberPin, HIGH);
+    //      byte temp = EEPROM.read(START_SECTION_RELE_EEPROM_UPR + i);
+    //      temp &= ~0b00000010;//reset bit 1
+    //      EEPROM.write(START_SECTION_RELE_EEPROM_UPR + i, temp);
+    //      comitEprom();
+    //    } else if (b == 1) { //Включаємо реле
+    //      releControl[i].onOffManual = 1;
+    //      digitalWrite(releControl[i].numberPin, LOW);
+    //      byte temp = EEPROM.read(START_SECTION_RELE_EEPROM_UPR + i);
+    //      temp |= 0b00000010;//reset bit 1
+    //      EEPROM.write(START_SECTION_RELE_EEPROM_UPR + i, temp);
+    //      comitEprom();
+    //    }
+
+    manual_vklOtkl(b, i);
+
+    byte stanRele = 0;
+    for (int i = 0; i < kilkistRele; i++) {
+      digitalRead(releControl[i].numberPin) == 0 ?  stanRele &= ~(1 << i) : stanRele |= (1 << i);//Формуємо маску бітів про стан кожного реле і відправляємо
+    }
+
+    client.publish(nameUser + "_stanRele", String(stanRele));
+    //    Serial.print("Send mesage stanRele");
+
+    //    for (int i = START_SECTION_RELE_EEPROM_UPR; i < START_SECTION_RELE_EEPROM_UPR + 8; i++) {
+    //
+    //      Serial.print(i);
+    //      Serial.print("--");
+    //      Serial.print(EEPROM.read(i));
+    //      Serial.print("--");
+    //      Serial.print((char)EEPROM.read(i));
+    //      Serial.print("--++++++++++++++++");
+    //      Serial.println(EEPROM.read(i), BIN);
+    //    }
+    //    return;
+  }
+  //=================================================================================
+
+  //=================================================================================
+
+  if (String(pub.topic()) == nameUser + "_rele_eprom_upr-set_number_sensor") // проверяем из нужного ли нам топика пришли данные
+  {
+    // 0x2k START_SECTION_RELE_EEPROM_SENSOR номер термодатчика для реле
+
+    String s = payload.substring(0, payload.indexOf('x')); //номер реле
+    String s1 = payload.substring(payload.indexOf('x') + 1, payload.indexOf('k')); //номер термодатчика який управляє реле
+    int a = s.toInt() + START_SECTION_RELE_EEPROM_SENSOR;
+    byte temp = EEPROM.read(a);
+    temp &= ~0b00001111;//reset bit 0-3
+    temp = temp + (s1.toInt());
+    EEPROM.write(a, temp);
+    comitEprom();
+    temp = EEPROM.read(a);
+    //    Serial.print("********");
+    //    Serial.println(temp);
+    //    Serial.println(s.toInt());
+    //    Serial.println(s1.toInt());
+    refreshData();
+    kontr_temp();
+    //        client.publish(nameUser+"_start-data-sensor-eepromAndDevice", "ReadTempVklOtkl");
+    //    Serial.print("Send mesage releControl");
+    client.publish(nameUser + "_start-data-sensor-eepromAndDevice", "releControl");
+
+    //    return;
+  }
+  //=================================================================================
+
+  //=================================================================================
+
+  if (String(pub.topic()) == nameUser + "_rele_eprom_upr-set_erorr_rele_vkl_vukl") // проверяем из нужного ли нам топика пришли данные
+  {
+    //0x2k START_SECTION_RELE_EEPROM_SENSOR біт 6 при несправності термодатчика або не можливості керувати таймером  в якому стані залишаємо реле
+    String s = payload.substring(0, payload.indexOf('x')); //номер реле
+    String s1 = payload.substring(payload.indexOf('x') + 1, payload.indexOf('k')); //номер термодатчика який управляє реле
+    int a = s.toInt() + START_SECTION_RELE_EEPROM_SENSOR;
+    byte temp = EEPROM.read(a);
+    temp &= ~(1 << 6);//reset bit 0-3
+    byte temp1 = s1.toInt();
+    if ((temp1 & (1 << 6))) {
+      temp |= (1 << 6); //записуємо 1 в біт 6
+    } else {
+      temp &= ~(1 << 6); //записуємо 0 в біт 6
+    }
+    EEPROM.write(a, temp);
+    comitEprom();
+    temp = EEPROM.read(a);
+    //    Serial.print("********");
+    //    Serial.println(temp, BIN);
+    refreshData();
+    kontr_temp();
+    //    client.publish(nameUser+"_start-data-sensor-eepromAndDevice", "ReadTempVklOtkl");
+    client.publish(nameUser + "_start-data-sensor-eepromAndDevice", "releControl");
+    //return;
+  }
+  //=================================================================================
+
+  //===================================================================================
+
+  if (String(pub.topic()) == nameUser + "_rele_eprom_upr-set_change_on_or_off") // проверяем из нужного ли нам топика пришли данные
+  {
+    //0x2k START_SECTION_RELE_EEPROM_SENSOR біт 5 при переключенні реле включається або виключається
+    String s = payload.substring(0, payload.indexOf('x')); //номер реле
+    String s1 = payload.substring(payload.indexOf('x') + 1, payload.indexOf('k')); //номер термодатчика який управляє реле
+    int a = s.toInt() + START_SECTION_RELE_EEPROM_SENSOR;
+    byte temp = EEPROM.read(a);
+    temp &= ~(1 << 5);//reset bit 0-3
+    byte temp1 = s1.toInt();
+    if ((temp1 & (1 << 5))) {
+      temp |= (1 << 5); //записуємо 1 в біт 5
+    } else {
+      temp &= ~(1 << 5); //записуємо 0 в біт 5
+    }
+
+    EEPROM.write(a, temp);
+    comitEprom();
+    temp = EEPROM.read(a);
+    //    Serial.print("********");
+    //    Serial.println(temp, BIN);
+    refreshData();
+    kontr_temp();
+    //    client.publish(nameUser+"_start-data-sensor-eepromAndDevice", "ReadTempVklOtkl");
+    //    Serial.print("Send mesage releControl");
+    client.publish(nameUser + "_start-data-sensor-eepromAndDevice", "releControl");
+    //return;
+  }
+  //=================================================================================
+
+  //===================================================================================
+  if (String(pub.topic()) == nameUser + "_rele_eprom_upr-set_one_or_two_range_temp") // проверяем из нужного ли нам топика пришли данные
+  {
+    //0x2k START_SECTION_RELE_EEPROM_SENSOR біт 4 1-два діапазона температур включенн і відключеня 0-один діапазон температур  включення або відключення
+
+    String s = payload.substring(0, payload.indexOf('x')); //номер реле
+    String s1 = payload.substring(payload.indexOf('x') + 1, payload.indexOf('k')); //номер термодатчика який управляє реле
+    int a = s.toInt() + START_SECTION_RELE_EEPROM_SENSOR;
+    byte temp = EEPROM.read(a);
+    temp &= ~(1 << 4);//reset bit 0-3
+    byte temp1 = s1.toInt();
+    if ((temp1 & (1 << 4))) {
+      temp |= (1 << 4); //записуємо 1 в біт 4
+    } else {
+      temp &= ~(1 << 4); //записуємо 0 в біт 4
+    }
+
+    EEPROM.write(a, temp);
+    comitEprom();
+    temp = EEPROM.read(a);
+    //    Serial.print("********");
+    //    Serial.println(temp, BIN);
+    refreshData();
+    kontr_temp();
+    //    Serial.print("Send mesage releControl");
+    client.publish(nameUser + "_start-data-sensor-eepromAndDevice", "releControl");
+    //return;
+  }
+  ////=================================================================================
+
+
+  //=================================================================================
+
+  if (String(pub.topic()) == nameUser + "_save-data-sensor-eeprom") // проверяем из нужного ли нам топика пришли данные
+  {
+
+    Sensor ds18b20_temp[8];
+    String sas = payload;
+
+    for (int i = 0; i < 8; i++)
+    {
+      sas = sas.substring(sas.indexOf("na") + 2);
+      String address = sas.substring(0, sas.indexOf("na"));
+      char buffer[address.length() + 1];
+      address.toCharArray(buffer, address.length() + 1);
+      //      Serial.println(address);
+      ds18b20_temp[i].strAddress = address;
+    }
+    writeEEPROMDataSensor(ds18b20_temp); //записуємо адреса в EEPROM
+    readEepromAddress();                 //читаємо address з памяті ЕЕПРОМ  в обєкт ds18b20EEprom
+
+    client.publish(nameUser + "_start-data-sensor-eepromAndDevice", "NameSensor");
+    client.publish(nameUser + "_start-data-sensor-eepromAndDevice", "readAddressSensor");
+    //return;
+  }
+  ////=================================================================================
+  //=================================================================================
+
+  if (String(pub.topic()) == nameUser + "_save-name-sensor-eeprom") // проверяем из нужного ли нам топика пришли данные
+  {
+    //*&name1*&name2*&name3*&name4*&name5*&name6*&name7*&name8
+    //Зберігаємо імя термодатчика
+    Sensor ds18b20_temp[8];
+    String sas = payload;
+
+    for (int i = 0; i < 8; i++)
+    {
+      sas = sas.substring(sas.indexOf("*&") + 2);
+      String address = sas.substring(0, sas.indexOf("*&"));
+      // String myString = "Arduino";
+
+      char buffer[address.length() + 1];
+      address.toCharArray(buffer, address.length() + 1);
+      //      Serial.println(address);
+      ds18b20_temp[i].nameSensor = address;
+      //      Serial.println(ds18b20_temp[i].nameSensor);
+    }
+
+    writeEEPROMNameSensor(ds18b20_temp); //записуємо адреса в EEPROM
+
+    //    readEepromAddress();                 //читаємо address з памяті ЕЕПРОМ  в обєкт ds18b20EEprom
+    //    for (int i = 442; i < 842; i++) {
+    //      Serial.print(i);
+    //      Serial.print("--");
+    //      Serial.print(EEPROM.read(i));
+    //      Serial.print("--");
+    //      Serial.print((char)EEPROM.read(i));
+    //      Serial.print("--");
+    //      Serial.println(EEPROM.read(i));
+    //    }
+    //    Serial.print("Send mesage name-sensor-eeprom");
+    client.publish(nameUser + "_start-data-sensor-eepromAndDevice", "NameSensor");
+    client.publish(nameUser + "_start-data-sensor-eepromAndDevice", "readAddressSensor");
+    //return;
+  }
+  ////=================================================================================
+
+
+}
+
+
+//=================================================================================
+void manual_vklOtkl(int b, int i ) {
+  if (b == 0) { //Виключаємо реле
+    releControl[i].onOffManual = 0;
+    digitalWrite(releControl[i].numberPin, HIGH);
+    byte temp = EEPROM.read(START_SECTION_RELE_EEPROM_UPR + i);
+    temp &= ~0b00000010;//reset bit 1
+    EEPROM.write(START_SECTION_RELE_EEPROM_UPR + i, temp);
+    comitEprom();
+  } else if (b == 1) { //Включаємо реле
+    releControl[i].onOffManual = 1;
+    digitalWrite(releControl[i].numberPin, LOW);
+    byte temp = EEPROM.read(START_SECTION_RELE_EEPROM_UPR + i);
+    temp |= 0b00000010;//reset bit 1
+    EEPROM.write(START_SECTION_RELE_EEPROM_UPR + i, temp);
+    comitEprom();
+  }
+}
+
+//=================================================================================
+
+
+
+void readSensorsAddressTemp() {
+  // read device address and temperature in class Sensors object ds18b20 arrays
+
+  //  oneWireBus = 12;//14
+  //  OneWire oneWire(oneWireBus);
+  //  DallasTemperature sensors(&oneWire);
+
+  sensors.requestTemperatures(); // от датчика получаем значение температуры
+  DeviceAddress Thermometer;
+  deviceCountSensor = sensors.getDeviceCount();
+
+
+
+  for (byte i = 0; i < deviceCountSensor; i++)
+  {
+    sensors.getAddress(Thermometer, i);
+    ds18b20[i].strAddress = sensorDeviceAddress(Thermometer);
+    Serial.print("temp  ");
+    Serial.print(i);
+    Serial.print("  ");
+    Serial.print(ds18b20[i].strAddress);
+
+    ds18b20[i].temp = sensors.getTempCByIndex(i);
+
+    Serial.print("  ");
+    Serial.print(ds18b20[i].temp);
+    ds18b20[i].number = i;
+  }
+
+
+}
+
+String sensorDeviceAddress(DeviceAddress deviceAddress)
+{
+  uint64_t address = 0;
+  String strAddress = "";
+  for (uint8_t i = 0; i < 8; i++)
+  {
+    address = address + deviceAddress[i];
+    if (deviceAddress[i] > 0)
+    {
+      if (deviceAddress[i] < 8)
+        strAddress += "0" + String(deviceAddress[i], HEX);
+      else
+        strAddress += String(deviceAddress[i], HEX);
+    }
+    else
+      strAddress += "00";
+    if (i < 7)
+      address = address << 8;
+  }
+  return strAddress;
+}
+
+
+
+
+
+
+String objectToJSON(Sensor obj[], int n)
+{
+  String s = "{\"obj\":[";
+  for (int i = 0; i < n; i++)
+  {
+    s += "{\"number\": " + String(String(i) + ", \"address\": " + "\"" + obj[i].strAddress) + "\"" + ", \"temp\": " + String(obj[i].temp) + "}" + (i < n - 1 ? "," : "");
+  }
+  s += "]}";
+  return s;
+}
+
+//записуємо дані із обєкта Sensor  в EEPROM
+void writeEEPROMDataSensor(Sensor sensor[])
+{
+  String strAddress = "";
+  for (int i = 0; i < 8; i++)
+  {
+    //    strAddress = "";
+    strAddress = sensor[i].strAddress;
+    for (int k = 7, d = 16; k >= 0; k--, d -= 2)
+    {
+      int addd = START_SECTION_EEPROM_SENSOR_ADDRESS + k + (i * 8);
+      String cc = strAddress.substring(d - 2, d);
+      char char_array[3];
+      cc.toCharArray(char_array, 3);
+      EEPROM.write(addd, (byte)strtol(char_array, NULL, 16));
+    }
+  }
+  comitEprom();
+
+  //---------------------------------------------------------------------
+  readEepromAddress(); //читаємо address з памяті ЕЕПРОМ  в обєкт ds18b20EEprom
+}
+
+//записуємо дані із обєкта Sensor  в EEPROM
+void writeEEPROMNameSensor(Sensor sensor[])
+{
+  const byte kilkistyBukv = 20;
+  for (int i = 0; i < 8; i++)
+  {
+    for (int k = 0; k < kilkistyBukv; k++)
+    {
+      int addd = START_SECTION_EEPROM_SENSOR_NAME + k + (i * kilkistyBukv);//Вираховуємо адрес для запису
+
+      if (k < sensor[i].nameSensor.length()) {//Якщо закінчився текст то дописуєм нулі
+        String cc = sensor[i].nameSensor.substring(k, k + 1);
+        //        Serial.print("cccc  ");
+        //        Serial.print(cc);
+        //        Serial.print("  adddr  ");
+        //        Serial.println(addd);
+        char char_array[2];
+        cc.toCharArray(char_array, 2);
+        EEPROM.write(addd, (byte)char_array[0]);
+      } else {
+        EEPROM.write(addd, 0);
+      }
+
+    }
+  }
+  comitEprom();
+
+  //---------------------------------------------------------------------
+  readEepromNameSensor(); //читаємо name з памяті ЕЕПРОМ  в обєкт ds18b20EEprom
+}
+
+
+//-----------------------------------------------
+//Формуємо мас адрес датчика в обєкт із памяті ЕЕПРОМ
+void readEepromAddress()
+{ //читаємо address з памяті ЕЕПРОМ
+  String strAddress = "";
+  //Формуємо мас адрес датчика в обєкт із памяті ЕЕПРОM
+  for (int i = 0; i < 8; i++)
+  {
+    strAddress = "";
+    for (int k = 0; k < 8; k++)
+    {
+      byte temp = EEPROM.read(START_SECTION_EEPROM_SENSOR_ADDRESS + k + (i * 8));
+      if (temp > 0)
+      {
+        if (temp < 10)
+          strAddress += "0" + String(temp, HEX);
+        else
+          strAddress += String(temp, HEX);
+      }
+      else
+        strAddress += "00";
+    }
+    ds18b20EEprom[i].strAddress = strAddress;
+    ds18b20EEprom[i].temp = 0;
+  }
+}
+
+
+//-----------------------------------------------
+void readEepromNameSensor()
+{ //читаємо address з памяті ЕЕПРОМ
+  const byte kilkistyBukv = 20;
+  //Формуємо мас адрес датчика в обєкт із памяті ЕЕПРОM
+  for (int i = 0; i < 8; i++)
+  {
+    ds18b20EEprom[i].nameSensor = "";
+    for (int k = 0; k < kilkistyBukv; k++)
+    {
+      int addd = START_SECTION_EEPROM_SENSOR_NAME + k + (i * kilkistyBukv);
+      byte data = EEPROM.read(addd);
+      if (data > 0 && data < 165)  ds18b20EEprom[i].nameSensor += char(data);
+    }
+    //ds18b20EEprom[i].nameSensor = readStringEeprom(START_SECTION_EEPROM_SENSOR_NAME + (i * kilkistyBukv), kilkistyBukv);
+  }
+}
+
+void readEepromNameRele()
+{ //читаємо address з памяті ЕЕПРОМ
+  const byte kilkistyBukv = 20;
+  //Формуємо мас адрес датчика в обєкт із памяті ЕЕПРОM
+  for (int i = 0; i < 8; i++)
+  {
+    releControl[i].nameRele = "";
+    for (int k = 0; k < kilkistyBukv; k++)
+    {
+      int addd = START_SECTION_EEPROM_RELE_NAME + k + (i * kilkistyBukv);
+      byte data = EEPROM.read(addd);
+      if (data > 0 && data < 165)  releControl[i].nameRele += char(data);
+    }
+
+    //releControl[i].nameRele = readStringEeprom(START_SECTION_EEPROM_RELE_NAME + (i * kilkistyBukv), kilkistyBukv);
+
+    //    Serial.print("IIIIII  ");
+    //    Serial.print(i);
+    //    Serial.print("  releControl[i].nameRele  ");
+    //    Serial.println(releControl[i].nameRele);
+  }
+
+}
+
+
+//read eeprom string Читає с EEPROM строку певної довжини
+String readStringEeprom(byte beginByteEeprom, byte lengthString ) {
+  String tempString;
+  for (int i = 0; i < lengthString; i++)
+  {
+    int addd = beginByteEeprom + i;
+    byte data = EEPROM.read(addd);
+    if (data > 0 && data < 165)  tempString += char(data);
+  }
+  return tempString;
+}
+
+//-----------------------------------------------
+
+
+
+
+
+
+
+//*************************************************************************************************************************************************
+int loopRefresh = 0;//counter refresh eeprom to date
+
+void refreshData() {
+  readEepromNameRele();
+  readEepromNameSensor();
+
+  if (loopRefresh == 0) {
+    //    refreshobjectToJsonDate();
+    loopRefresh = 2;
+  }
+
+  loopRefresh--;
+
+
+  //читаємо температури включення і відключення
+  for (int i = START_SECTION_EEPROM_TEMP_ON_OFF, n = 0; i < START_SECTION_EEPROM_TEMP_ON_OFF + 16; i += 2, n++)
+  {
+    ds18b20[n].tempVkl = EEPROM.read(i) - 50;
+    ds18b20[n].tempOtkl = EEPROM.read(i + 1) - 50;
+  }
+
+  for (int i = 0; i < 8; i++)
+  {
+    byte temp = EEPROM.read(START_SECTION_RELE_EEPROM_SENSOR + i);
+    releControl[i].numberSensorControl = temp & ~0b11110000;
+    releControl[i].bit4OneOrTwoRange = (temp & ~0b11101111) >> 4;
+    releControl[i].bit5OnOffChange = (temp & ~0b11011111) >> 5;
+    releControl[i].bit6ReleError = (temp & ~0b10111111) >> 6;
+    temp = EEPROM.read(START_SECTION_RELE_EEPROM_UPR + i);
+    releControl[i].manualAuto = temp & ~0b11111110;
+    releControl[i].onOffManual = ((temp & ~0b11111101) >> 1);
+    releControl[i].termoControl = ((temp & ~0b11111011) >> 2);
+    releControl[i].timerControl = ((temp & ~0b00000111) >> 3);
+    ds18b20EEprom[i].tempVkl =  EEPROM.read(START_SECTION_EEPROM_TEMP_ON_OFF + i * 2) - 50;
+    ds18b20EEprom[i].tempOtkl =  EEPROM.read(START_SECTION_EEPROM_TEMP_ON_OFF + i * 2 + 1) - 50;
+
+  }
+
+}
+
+
+
+//*************************************************************************************************************************************************
+unsigned long nextElement(String s) {//пошук наступного елемента в строці якщо кінець повертає -1
+  symbolStart = symbolEnd;
+  symbolEnd = s.indexOf('-', symbolStart + 1);
+  if (!(symbolStart < 0 || symbolEnd < 0)) {
+    String  s2 = s.substring(symbolStart + 1, symbolEnd ); //номер реле
+    //     Serial.print("SSSS22222 ");
+    //    Serial.println(s2);
+    unsigned long a = 0;
+    for (byte i = 0; i < s2.length(); i++) {
+      a = a * 10;
+      String s3 = s2.substring(i, i + 1 );
+      //   Serial.print("SSSS333 ");
+      //    Serial.println(s3);
+      int b = s3.toInt();
+      a = a + b;
+    }
+    //    Serial.println(a);
+    return a;
+  } else return -1;
+}
+
+
+
+//*************************************************************************************************************************************************
+void printObjectTime() {
+  for (int i = 0; i < 8; i++) {
+
+    Serial.print("NUMBER RELE  ");
+    Serial.println(i);
+    Serial.print("DElay rele start  ");
+    Serial.println(dataAndTime[i].delaySecondStart);
+    for (int k = 0; k < 10; k++) {
+      Serial.print(dataAndTime[i].data_datamiliseconds[k]);
+      Serial.print("  ");
+      Serial.print(dataAndTime[i].data_rik[k]);
+      Serial.print("  ");
+      Serial.print(dataAndTime[i].data_months[k]);
+      Serial.print("  ");
+      Serial.print(dataAndTime[i].data_dey[k]);
+      Serial.print("  ");
+      Serial.print(dataAndTime[i].data_godyna[k]);
+      Serial.print("  ");
+      Serial.print(dataAndTime[i].data_minut[k]);
+      Serial.print("  ");
+      Serial.println(dataAndTime[i].data_daywikend[k]);
+    }
+
+    Serial.println("*****************************");
+
+    for (int k = 0; k < 50; k++) {
+      Serial.print(dataAndTime[i].godyna[k]);
+      Serial.print(":");
+      Serial.print(dataAndTime[i].minut[k]);
+      Serial.print(" ");
+    }
+
+    Serial.println("*****************************");
+
+    for (int k = 0; k < 35; k++) {
+      Serial.print(dataAndTime[i].dey[k]);
+    }
+    Serial.println("*****************************");
+    Serial.println("*****************************");
+    Serial.println("*****************************");
+  }
+
+}
+
+
+//*************************************************************************************************************************************************
+void refreshobjectToJsonDate() {
+  readEEPROMTimerToObjeckt();
+  for (int i = 0; i < 8; i++) {
+    //    Serial.println(objectToJsonDate(dataAndTime[i], i));
+    for (byte numPak = 1; numPak < 5; numPak++)
+      client.publish(nameUser + "_out-web-rele-data-time", objectToJsonDate(dataAndTime[i], i, numPak));
+    delay(30);
+  }
+}
+//*************************************************************************************************************************************************
+void readEEPROMTimerToObjeckt() { // Читаємо дані з памяті еепром в обєкт
+  for (int i = 0; i < 8; i++) {
+    EEPROM.get(START_SECTION_EEPROM_TIMERDATE + (sizeof(timerDate)*i) , dataAndTime[i]);
+  }
+}
+//*************************************************************************************************************************************************
+String objectToJsonDate(timerDate obj, byte num, byte numberPackege) {
+  String output;
+
+
+  output = "{";
+  output += "\"NUMPACKAGE\":";
+  output += String(numberPackege);
+  output +=  ", ";
+  const word NumberElementDate = 10;
+
+  if (numberPackege == 1) {
+    output += "\"NUM\":";
+    output += String(num);
+    output +=  ", ";
+    output +=   "\"DELAYSECONDSTART\":";
+    output += String(dataAndTime[num].delaySecondStart);
+    output +=  ", ";
+    output +=   "\"DATATIME\":";
+    output +=  "[";
+    for (int k = 0; k < NumberElementDate; k++) {
+      output += "\"";
+      output += String(dataAndTime[num].data_rik[k]);
+      output += "-";
+      if (dataAndTime[num].data_months[k] > 9)output += String(dataAndTime[num].data_months[k]);
+      else {
+        output += "0";
+        output += String(dataAndTime[num].data_months[k]);
+      }
+      output += "-";
+      if (dataAndTime[num].data_dey[k] > 9)output += String(dataAndTime[num].data_dey[k]);
+      else {
+        output += "0";
+        output += String(dataAndTime[num].data_dey[k]);
+      }
+      output += "T";
+      if (dataAndTime[num].data_godyna[k] > 9)output += String(dataAndTime[num].data_godyna[k]);
+      else {
+        output += "0";
+        output += String(dataAndTime[num].data_godyna[k]);
+      }
+      output += ":";
+      if (dataAndTime[num].data_minut[k] > 9)output += String(dataAndTime[num].data_minut[k]);
+      else {
+        output += "0";
+        output += String(dataAndTime[num].data_minut[k]);
+      }
+      output += "\"";
+      if (k < NumberElementDate - 1)output +=  ", ";
+    }
+    output +=  "]";
+    //"data_":"2022-5-16 12:30",
+
+    //  output +=  ", ";
+  }
+
+  if (numberPackege == 2) {
+    output +=   "\"TIME\":";
+    output +=  "[";
+    const word NumberElementTime = 25;
+    for (int k = 0; k < NumberElementTime; k++) {
+      output += "\"";
+      if (dataAndTime[num].godyna[k] > 9)output += String(dataAndTime[num].godyna[k]);
+      else {
+        output += "0";
+        output += String(dataAndTime[num].godyna[k]);
+      }
+      output += ":";
+      if (dataAndTime[num].minut[k] > 9)output += String(dataAndTime[num].minut[k]);
+      else {
+        output += "0";
+        output += String(dataAndTime[num].minut[k]);
+      }
+      output += "\"";
+      if (k < NumberElementTime - 1)output +=  ", ";
+    }
+    output +=  "]";
+    //  output +=  ", ";
+  }
+
+  if (numberPackege == 3) {
+    output +=   "\"TIME\":";
+    output +=  "[";
+    const word NumberElementTime = 50;
+    for (int k = 25; k < NumberElementTime; k++) {
+      output += "\"";
+      if (dataAndTime[num].godyna[k] > 9)output += String(dataAndTime[num].godyna[k]);
+      else {
+        output += "0";
+        output += String(dataAndTime[num].godyna[k]);
+      }
+      output += ":";
+      if (dataAndTime[num].minut[k] > 9)output += String(dataAndTime[num].minut[k]);
+      else {
+        output += "0";
+        output += String(dataAndTime[num].minut[k]);
+      }
+      output += "\"";
+      if (k < NumberElementTime - 1)output +=  ", ";
+    }
+    output +=  "]";
+    //  output +=  ", ";
+  }
+
+  if (numberPackege == 4) {
+    output +=   "\"DEY\":";
+    output +=  "[";
+    const word NumberElementDay = 35;
+    for (int k = 0; k < NumberElementDay; k++) {
+      output += String(dataAndTime[num].dey[k]);
+      if (k < NumberElementDay - 1)output +=  ", ";
+    }
+    output +=  "]";
+  }
+
+  output += "}";
+  Serial.print("OUTPUT LENGTH  ");
+  Serial.println(output.length());
+  return output;
+}
+
+//*************************************************************************************************************************************************
+
+void clearEepromDate(byte relayNumber) {
+  byte x = 99;
+
+
+  dataAndTime[relayNumber].delaySecondStart = 65535;
+
+  for (int i = 0; i < 10; i++) {
+    dataAndTime[relayNumber].data_datamiliseconds[i] = 4294967295;
+    dataAndTime[relayNumber].data_rik[i] = 65535;
+    dataAndTime[relayNumber].data_months[i] = x;
+    dataAndTime[relayNumber].data_dey[i] = x;
+    dataAndTime[relayNumber].data_godyna[i] = x;
+    dataAndTime[relayNumber].data_minut[i] = x;
+    dataAndTime[relayNumber].data_daywikend[i] = x;
+  }
+
+  for (int i = 0; i < 50; i++) {
+    dataAndTime[relayNumber].godyna[i] = x;
+    dataAndTime[relayNumber].minut[i] = x;
+  }
+
+  for (int i = 0; i < 35; i++) {
+    dataAndTime[relayNumber].dey[i] = x;
+  }
+
+  EEPROM.put(START_SECTION_EEPROM_TIMERDATE + (sizeof(timerDate)*relayNumber), dataAndTime[relayNumber]); //write objeck to EEPROM
+  comitEprom();
+
+
+}
+
+
+
+//    String nameRele; //імя реле
+//    byte onOffManual; //при ручному режимі реле включено чи виключено
+//    byte numberPin;           //номер піна до якого підключено реле
+//    byte numberSensorControl; // номер датчика який управляє даним реле якщо 15 записано то реле не управляється ніяким сенсором
+//    byte manualAuto;            // вкл або виключено
+//    byte termoControl;     // Буде чи ні реле керуватися термодатчиком
+//    byte timerControl;        // Якщо 0 то реле не контролюється таймером, якщо більше 0 то вказуємо тип таймера
+//    byte bit4OneOrTwoRange;  //1-два діапазона температур включенн і відключеня 0-один діапазон температур  включення або відключення
+//    byte bit5OnOffChange; //при переключенні реле включається або виключається
+//    byte bit6ReleError; //при несправності термодатчика або неможливість управляти таймером реле залишаємо вкл 1 або відключеним -0
+
+//    boolean flagsTermo;//  якщо спрацювала умова включення для термодатчика
+//    boolean flagsTimer;//  якщо спрацювала умова включення для таймера
+//    boolean flagsDelaystart;// якщо спрацювала умова затримки при включенні
+
+//*************************************************************************************************************************************************
+
+
+
+
+
+
+
+
+
+
+
+
+byte ChangeLow, ChangeHIGH;
+
+
+void kontr_temp()
+{
+
+  Serial.print(" СonnectedInternet ");
+  Serial.println(connectedInternet);
+  getDateTime();
+  //  Serial.println("start readSensorsAddressTemp");
+  readSensorsAddressTemp();//читаємо address з датчиків в обєкт ds18b20
+  //  Serial.println("stop readSensorsAddressTemp ");
+  // readEepromAddress();//читаємо address з памяті ЕЕПРОМ  в обєкт ds18b20EEprom
+  byte  stanRele = 0;
+  //  Serial.println();
+  //  Serial.println();
+  for (int numberRele = 0; numberRele < 8; numberRele++)// перебираємо всі реле
+  {
+    if (releControl[numberRele].manualAuto == 0) {
+      //Якщо неручний режим
+
+
+      //      Serial.println("*********************************************************");
+      //
+      //      Serial.println(" AUTO ");
+
+      //********************Реверс реле************************
+
+      if (releControl[numberRele].bit5OnOffChange == 0) {//Реверс реле
+        ChangeLow = 1;
+        ChangeHIGH = 0;
+      } else if (releControl[numberRele].bit5OnOffChange == 1) {
+        ChangeLow = 0;
+        ChangeHIGH = 1;
+      }
+      //********************Реверс реле************************
+
+
+      //********************CONTROL TERMO SENSOR************************
+      if (releControl[numberRele].numberSensorControl < 15 )//Якщо керуємо термодатчиком то в змінну буле записано номер термодатчика від 0 до 8 замість числа 15 - неуправляємо нічим
+      {
+        //Превірка чи підключений термодатчик яким управляємо реле, що записаний в памяті EEPROM
+
+        boolean flag = true;
+        for (int k = 0; k < deviceCountSensor; k++) {
+
+          if (ds18b20EEprom[releControl[numberRele].numberSensorControl].strAddress == ds18b20[k].strAddress) { //Найдено сенсор який є в памяті EEPROM
+            //            Serial.print("Kontrol sensor rele ");
+            //            Serial.println(numberRele);
+            releControl[numberRele].errorSensor = false;
+            if (releControl[numberRele].bit4OneOrTwoRange == 0) {//Один діапазон
+              //              Serial.print("ds18b20 ");
+              //              Serial.print(ds18b20[k].temp);
+              //              Serial.print(" -- ");
+              //              Serial.print(ds18b20[numberRele].tempVkl);
+              //              Serial.print(" -- ");
+              //              Serial.println(releControl[numberRele].numberSensorControl);
+
+              if (ds18b20[k].temp > ds18b20[numberRele].tempVkl)
+              {
+                releControl[numberRele].flagsTermo = true;
+              } else {
+                releControl[numberRele].flagsTermo = false;
+              }
+            } else if (releControl[numberRele].bit4OneOrTwoRange == 1) {//Два діапазони
+              if (ds18b20[k].temp > ds18b20[numberRele].tempVkl && ds18b20[k].temp < ds18b20[numberRele].tempOtkl)
+              {
+                releControl[numberRele].flagsTermo = true;
+              } else {
+                releControl[numberRele].flagsTermo = false;
+              }
+            }
+            break;
+          } else {
+            //            Serial.print("NOT SENSOR ");
+            //            Serial.println(numberRele);
+            releControl[numberRele].errorSensor = true;
+          }
+
+        }
+        //      if (flag)Serial.println("Send messeg not sensor");
+      }
+      else {
+
+      }
+      //********************CONTROL TERMO SENSOR************************
+
+
+
+
+
+
+      //      struct timerFlag {//
+      //        boolean  timerDate;//Флаг для дати якщо текущая дата в діапазоні то ставимо в TRUE
+      //        boolean timerTime;//Флаг для години якщо текущая година в діапазоні то ставимо в TRUE
+      //      };
+
+
+      boolean  timersFlagSections[5];//
+      timersFlagSections[0] = false;
+      timersFlagSections[1] = false;
+      timersFlagSections[2] = false;
+      timersFlagSections[3] = false;
+      timersFlagSections[4] = false;
+
+      //        Serial.print("timersFlagSections:  ");
+      //        Serial.print(timersFlagSections[0]);
+      //        Serial.print("  ");
+      //        Serial.print(timersFlagSections[1]);
+      //        Serial.print("  ");
+      //        Serial.print(timersFlagSections[2]);
+      //        Serial.print("  ");
+      //        Serial.print(timersFlagSections[3]);
+      //        Serial.print("  ");
+      //        Serial.println(timersFlagSections[4]);
+
+
+      for (byte numberDataTime = 0; numberDataTime < 9; numberDataTime += 2  ) { //numberDataTime 0 2 4 6 8     0 10 20 30 40
+
+        //          Serial.print("LOOP DATE AND TIME:");
+        //          Serial.println(numberDataTime);
+
+        //          Serial.println();
+        //          Serial.print("data_datamiliseconds     ");
+        //          Serial.println(dataAndTime[numberRele].data_datamiliseconds[numberDataTime]);
+        //          Serial.print("data_datamiliseconds +1  ");
+        //          Serial.println(dataAndTime[numberRele].data_datamiliseconds[numberDataTime + 1]);
+        //        Serial.print("getDate.epochTime        ");
+        //        Serial.println(getDate.epochTime);
+        //
+        //        Serial.print("godyna:");
+        //        Serial.println(dataAndTime[numberRele].godyna[numberDataTime * 5]);
+
+        if (dataAndTime[numberRele].data_datamiliseconds[numberDataTime] != 4294967295  &&  dataAndTime[numberRele].godyna[numberDataTime * 5] < 24)//Якщо в секції вибрано і  дата і година
+        {
+          //          Serial.print("CONTROL DATE AND TIME numberRele:  ");
+          //          Serial.print(numberRele);
+          //          Serial.print("  numberDataTime  ");
+          //          Serial.println(numberDataTime);
+          if (controlRangeDate(numberRele, numberDataTime) && controlRangeHour(numberRele, numberDataTime)) {
+            timersFlagSections[numberDataTime / 2] = true;
+          }
+          else {
+            timersFlagSections[numberDataTime / 2] = false;
+          }
+
+        } else if (dataAndTime[numberRele].data_datamiliseconds[numberDataTime] != 4294967295)//Якщо в секції вибрана дата
+        {
+          //          Serial.print("CONTROL DATE:numberRele  ");
+          //          Serial.print(numberRele);
+          //          Serial.print("  numberDataTime  ");
+          //          Serial.println(numberDataTime);
+          timersFlagSections[numberDataTime / 2] = controlRangeDate(numberRele, numberDataTime);
+        } else if (dataAndTime[numberRele].godyna[numberDataTime * 5] != 99) //Якщо в секції вибрана година
+        {
+          //          Serial.print("CONTROL  TIME:numberRele  ");
+          //          Serial.print(numberRele);
+          //          Serial.print("  numberDataTime  ");
+          //          Serial.println(numberDataTime);
+          timersFlagSections[numberDataTime / 2] = controlRangeHour(numberRele, numberDataTime );
+        } else {
+          //            releControl[numberRele].timerControl = 0;
+        }
+
+        //Провіряємо флаги всіх блоків даного реле і якщо хоща б один дорівнює true то  flagsTimer = true
+        //          Serial.print("timersFlagSections change:  ");
+        //          Serial.print(timersFlagSections[0]);
+        //          Serial.print("  ");
+        //          Serial.print(timersFlagSections[1]);
+        //          Serial.print("  ");
+        //          Serial.print(timersFlagSections[2]);
+        //          Serial.print("  ");
+        //          Serial.print(timersFlagSections[3]);
+        //          Serial.print("  ");
+        //          Serial.println(timersFlagSections[4]);
+        //
+        //          Serial.print("flagsTimer:  ");
+        //          Serial.println(releControl[numberRele].flagsTimer);
+
+        if (timersFlagSections[0] ||  timersFlagSections[1] ||  timersFlagSections[2] ||  timersFlagSections[3] ||  timersFlagSections[4]) {
+          releControl[numberRele].flagsTimer = true;
+          //            Serial.println(releControl[numberRele].flagsTimer);
+        } else {
+          releControl[numberRele].flagsTimer = false;
+          //            Serial.println(releControl[numberRele].flagsTimer);
+        }
+        //          Serial.print("flagsTimer change:  ");
+        //          Serial.println(releControl[numberRele].flagsTimer);
+      }
+      //        Serial.println("OUOUOIUOIUOIUOIUOI  ");
+      //        Serial.println(dataAndTime[numberRele].godyna[0]);
+      //        Serial.println(dataAndTime[numberRele].godyna[10]);
+      //        Serial.println(dataAndTime[numberRele].godyna[20]);
+      //        Serial.println(dataAndTime[numberRele].godyna[30]);
+      //        Serial.println(dataAndTime[numberRele].godyna[40]);
+      //        Serial.println();
+
+
+      if (dataAndTime[numberRele].data_datamiliseconds[0] != 4294967295  || dataAndTime[numberRele].data_datamiliseconds[2] != 4294967295 ||
+          dataAndTime[numberRele].data_datamiliseconds[4] != 4294967295 || dataAndTime[numberRele].data_datamiliseconds[6] != 4294967295 ||
+          dataAndTime[numberRele].data_datamiliseconds[8] != 4294967295 || dataAndTime[numberRele].godyna[0] < 24 || dataAndTime[numberRele].godyna[10] < 24
+          || dataAndTime[numberRele].godyna[20] < 24 || dataAndTime[numberRele].godyna[30] < 24 || dataAndTime[numberRele].godyna[40] < 24) {
+        releControl[numberRele].timerControl = 1;
+        //        Serial.println("TIMER CONTROL GLOBAL ++++");
+      } else {
+        releControl[numberRele].timerControl = 0;
+        //        Serial.println("TIMER CONTROL GLOBAL ----");
+      }
+      //********************CONTROL TIMER*******************************
+
+      //********************CONTROL DELAY*******************************
+      //      if (releControl[numberRele].timerControl > 0 )//Затримка при включенні якщо значення паузи 0 то постфйно включене якщо ні то чекаємо
+      //      {
+      //        releControl[numberRele].flagsTimer = false;
+      //      }
+      //********************CONTROL DELAY*******************************
+
+      //********************CONTROL FLAGS*******************************
+      if (releControl[numberRele].numberSensorControl < 15 && releControl[numberRele].timerControl == 1)   //Якщо реле регул двома
+      {
+        //        Serial.println("CONTROL  TIME AND SENSOR::::::::::::  ");
+        if (!releControl[numberRele].errorSensor  && connectedInternet) {// Якщо датчик присутній  і є година з інтернету
+          if (releControl[numberRele].flagsTermo &&  releControl[numberRele].flagsTimer) {
+            digitalWrite(releControl[numberRele].numberPin, ChangeLow);
+          } else {
+            digitalWrite(releControl[numberRele].numberPin, ChangeHIGH);
+          }
+        } else {// Якщо датчик помилка
+          if (releControl[numberRele].bit6ReleError == 1)
+            digitalWrite(releControl[numberRele].numberPin, ChangeLow);
+          else if (releControl[numberRele].bit6ReleError == 0)
+            digitalWrite(releControl[numberRele].numberPin, ChangeHIGH);
+        }
+
+      } else if (releControl[numberRele].numberSensorControl < 15) {   //Якщо реле регул termo
+        //        Serial.println("CONTROL  SENSOR ::::::::::::  ");
+
+        if (!releControl[numberRele].errorSensor) {// Якщо датчик присутній
+          if (releControl[numberRele].flagsTermo) {
+            digitalWrite(releControl[numberRele].numberPin, ChangeLow);
+          } else {
+            digitalWrite(releControl[numberRele].numberPin, ChangeHIGH);
+          }
+        } else {// Якщо датчик помилка
+          if (releControl[numberRele].bit6ReleError == 1)
+            digitalWrite(releControl[numberRele].numberPin, ChangeLow);
+          else if (releControl[numberRele].bit6ReleError == 0)
+            digitalWrite(releControl[numberRele].numberPin, ChangeHIGH);
+        }
+      } else if (releControl[numberRele].timerControl == 1) {   //Якщо реле регул timer
+
+        if (connectedInternet) {// Якщо є година з інтернету
+          //          Serial.println("CONTROL  TIME ::::::::::::  ");
+          if (releControl[numberRele].flagsTimer) {
+            digitalWrite(releControl[numberRele].numberPin, ChangeLow);
+          } else {
+            digitalWrite(releControl[numberRele].numberPin, ChangeHIGH);
+          }
+        } else {// Якщо година з інтернету помилка неррацює інтернет
+          if (releControl[numberRele].bit6ReleError == 1)
+            digitalWrite(releControl[numberRele].numberPin, ChangeLow);
+          else if (releControl[numberRele].bit6ReleError == 0)
+            digitalWrite(releControl[numberRele].numberPin, ChangeHIGH);
+        }
+
+
+
+      } else { //Якщо реле нічого не регулює то ми його відключаємо
+        //        Serial.println("NOT CONTROL RELE ::::::::::::  ");
+        digitalWrite(releControl[numberRele].numberPin, 1);
+      }
+      //********************CONTROL FLAGS*******************************
+      //        deleteAndMovingSection(numberRele);// Очистка пустої або простроченої дати
+      //      Serial.println();
+      //      Serial.println("*********************************************************");
+
+
+    } else { //при ручному режимі
+      //      Serial.print(" MANUAL MANUAL  ");
+      if (releControl[numberRele].onOffManual == 0)
+        digitalWrite(releControl[numberRele].numberPin, 1);
+      else
+        digitalWrite(releControl[numberRele].numberPin, 0);
+    }
+    digitalRead(releControl[numberRele].numberPin) == 0 ?  stanRele &= ~(1 << numberRele) : stanRele |= (1 << numberRele);//Для кожного реле читаємо в якому воно стані і записуємо певний біт
+  }
+
+  //  Serial.println();
+  //  Serial.println();
+  //Відправляємо стани всіх реле
+  client.publish(nameUser + "_stanRele", String(stanRele));
+  client.publish(nameUser + "analogInputA0", String(analogRead(A0)));
+  //  Serial.print(" stanRele>>>>>>>>>>>><<<<<<<<<<<  ");
+  //  Serial.println(stanRele, BIN);
+}
+
+
+
+
+//void deleteAndMovingSection(byte numberRele) {
+//  for (byte x = 0; x < 9; x += 2) {
+//    if (dataAndTime[numberRele].data_datamiliseconds[x + 1] < (getDate.epochTime)) { //Якщо  елемент з датою  простроченo
+//      deleteOldDate(numberRele, x);//Видаляємо прострочену секцію
+//      for (byte startSection = x + 2; startSection < 9; startSection += 2 ) {
+//        //        Serial.print("data_datamiliseconds:<><><><><><><> ");
+//        //        Serial.println(startSection);
+//        //        Serial.println(startSection - 2);
+//        movingSection(numberRele,  startSection,  startSection - 2);
+//      }
+//      deleteOldDate(numberRele, 8);//Видаляємо останню секцію
+//      EEPROM.put(START_SECTION_EEPROM_TIMERDATE + (sizeof(timerDate)*numberRele), dataAndTime[numberRele]); //write objeck to EEPROM
+//      comitEprom();
+//      x -= 2; //Повторно перевіряємо ту саму мекцію адже на її місце приїхали нові дані
+//      //      client.publish(nameUser+"_out-web-rele-data-time", objectToJsonDate(dataAndTime[numberRele], numberRele));
+//    }
+//  }
+//
+//}
+
+//void deleteOldDate(byte numberRele, byte numberDataTime) {
+//  //  Serial.print("delete the old date:");
+//  dataAndTime[numberRele].data_datamiliseconds[numberDataTime] = 4294967295;
+//  dataAndTime[numberRele].data_datamiliseconds[numberDataTime + 1] = 4294967295;
+//  dataAndTime[numberRele].data_rik[numberDataTime] = 65535;
+//  dataAndTime[numberRele].data_rik[numberDataTime + 1] = 65535;
+//  dataAndTime[numberRele].data_months[numberDataTime] = 99;
+//  dataAndTime[numberRele].data_months[numberDataTime + 1] = 99;
+//  dataAndTime[numberRele].data_dey[numberDataTime] = 99;
+//  dataAndTime[numberRele].data_dey[numberDataTime + 1] = 99;
+//  dataAndTime[numberRele].data_godyna[numberDataTime] = 99;
+//  dataAndTime[numberRele].data_godyna[numberDataTime + 1] = 99;
+//  dataAndTime[numberRele].data_minut[numberDataTime] = 99;
+//  dataAndTime[numberRele].data_minut[numberDataTime + 1] = 99;
+//  dataAndTime[numberRele].data_daywikend[numberDataTime] = 99;
+//  dataAndTime[numberRele].data_daywikend[numberDataTime + 1] = 99;
+//
+//  for (byte i = 0; i < 10; i++ ) {
+//    dataAndTime[numberRele].godyna[numberDataTime * 5 + i] = 99;
+//    dataAndTime[numberRele].minut[numberDataTime * 5 + i] = 99;
+//    if (i < 7)dataAndTime[numberRele].dey[numberDataTime * 5 + i] = 0;
+//  }
+//}
+
+//void movingSection(byte numberRele, byte numberSectionStart, byte numberSectionEnd) {
+//  //  Serial.println("movingSection:");
+//  dataAndTime[numberRele].data_datamiliseconds[numberSectionEnd] = dataAndTime[numberRele].data_datamiliseconds[numberSectionStart];
+//  dataAndTime[numberRele].data_datamiliseconds[numberSectionEnd + 1] = dataAndTime[numberRele].data_datamiliseconds[numberSectionStart + 1];
+//  dataAndTime[numberRele].data_rik[numberSectionEnd] =  dataAndTime[numberRele].data_rik[numberSectionStart];
+//  dataAndTime[numberRele].data_rik[numberSectionEnd + 1] = dataAndTime[numberRele].data_rik[numberSectionStart + 1];
+//  dataAndTime[numberRele].data_months[numberSectionEnd] = dataAndTime[numberRele].data_months[numberSectionStart];
+//  dataAndTime[numberRele].data_months[numberSectionEnd + 1] = dataAndTime[numberRele].data_months[numberSectionStart + 1];
+//  dataAndTime[numberRele].data_dey[numberSectionEnd] = dataAndTime[numberRele].data_dey[numberSectionStart];
+//  dataAndTime[numberRele].data_dey[numberSectionEnd + 1] = dataAndTime[numberRele].data_dey[numberSectionStart + 1];
+//  dataAndTime[numberRele].data_godyna[numberSectionEnd] = dataAndTime[numberRele].data_godyna[numberSectionStart];
+//  dataAndTime[numberRele].data_godyna[numberSectionEnd + 1] = dataAndTime[numberRele].data_godyna[numberSectionStart + 1];
+//  dataAndTime[numberRele].data_minut[numberSectionEnd] = dataAndTime[numberRele].data_minut[numberSectionStart] ;
+//  dataAndTime[numberRele].data_minut[numberSectionEnd + 1] = dataAndTime[numberRele].data_minut[numberSectionStart + 1];
+//  dataAndTime[numberRele].data_daywikend[numberSectionEnd] = dataAndTime[numberRele].data_daywikend[numberSectionStart];
+//  dataAndTime[numberRele].data_daywikend[numberSectionEnd + 1] = dataAndTime[numberRele].data_daywikend[numberSectionStart + 1];
+//
+//  for (byte i = 0; i < 10; i++ ) {
+//    dataAndTime[numberRele].godyna[numberSectionEnd * 5 + i] = dataAndTime[numberRele].godyna[numberSectionStart * 5 + i];
+//    dataAndTime[numberRele].minut[numberSectionEnd * 5 + i] = dataAndTime[numberRele].minut[numberSectionStart * 5 + i];
+//    if (i < 7)dataAndTime[numberRele].dey[numberSectionEnd * 5 + i] = dataAndTime[numberRele].dey[numberSectionStart * 5 + i];
+//  }
+//}
+
+//*****************************************************************************
+boolean controlRangeDate(byte numberRele, byte numberDataTime) {
+  if (dataAndTime[numberRele].data_datamiliseconds[numberDataTime] <= (getDate.epochTime)  &&    dataAndTime[numberRele].data_datamiliseconds[numberDataTime + 1] >= (getDate.epochTime) )
+  {
+    //    Serial.print("RELE DATA VKL:");
+    //    Serial.println(numberRele);
+    return true;
+  } else {
+    //    Serial.print("RELE DATA OTKL:");
+    //    Serial.println(numberRele);
+    return false;
+  }
+}
+//******************************************************************************
+
+
+//******************************************************************************
+byte controlRangeHour( byte numberRele, byte numberDataTime) {
+
+  boolean  SubTimersFlagSections[5];//флаги для годин в секції
+  for (byte numberTime = 0; numberTime < 9; numberTime += 2  ) { //numberTime 0 2 4 6 8) {//провіряємо в секії всі години і для кожної ставимо флаг
+    word tempGod_0 = dataAndTime[numberRele].godyna[numberTime + numberDataTime * 5];
+    word tempGod_1 = dataAndTime[numberRele].godyna[numberTime + numberDataTime * 5 + 1];
+    word tempMinute_0 = dataAndTime[numberRele].minut[numberTime + numberDataTime * 5];
+    word tempMinute_1 = dataAndTime[numberRele].minut[numberTime + numberDataTime * 5 + 1];
+    word tempGodStart = tempGod_0 * 60 + tempMinute_0;
+    word tempGodStop = tempGod_1 * 60 + tempMinute_1;
+    word tempCurentGod = getDate.currentHour * 60 + getDate.currentMinute;
+
+
+    if (tempGodStart <= tempCurentGod  &&  tempGodStop > tempCurentGod)
+    {
+      digitalWrite(releControl[numberRele].numberPin, ChangeLow);
+      SubTimersFlagSections[numberTime / 2] = true;
+    } else {
+      digitalWrite(releControl[numberRele].numberPin, ChangeHIGH);
+      SubTimersFlagSections[numberTime / 2] = false;
+    }
+  }
+
+  //   0 2 4 6 8   0-6   7-13   14-20    21-27   28 - 34
+  //   0 1 2 3 4
+  //   1 2 3 4 5
+  //getDate.weekDay
+  //dataAndTime[numberRele].dey[]
+  boolean flagDey;
+  int tempweekDayNumber = getDate.weekDayNumber - 1;
+
+  if (tempweekDayNumber == -1)tempweekDayNumber = 6;
+
+  if (dataAndTime[numberRele].dey[tempweekDayNumber + numberDataTime / 2 * 7] == 1) {
+    flagDey = true;
+    Serial.println("flagDey --true");
+  } else {
+    flagDey = false;
+  }
+
+  //Провіряємо флаги всіх годин даної секції і якщо хощаб одина дорівнює true то  timersFlagSections = true
+  if ((SubTimersFlagSections[0] || SubTimersFlagSections[1] || SubTimersFlagSections[2] || SubTimersFlagSections[3] || SubTimersFlagSections[4]) && flagDey ) {
+    return  1;
+  } else {
+    return  0;
+  }
+}
+
+
+//******************************************************************************
+
+
+//class GetDate {
+//  public:
+//    time_t epochTime;
+//    String formattedTime;
+//    int currentHour;
+//    int currentMinute;
+//    int currentSecond;
+//    int weekDayNumber;
+//    String weekDay;
+//    int monthDay;
+//    int currentMonth;
+//    String currentMonthName;
+//    int currentYear;
+//    String currentDate;
+//};
+//GetDate getDate;
+
+
+void getDateTime() {
+  timeClient.update();
+  //
+  //  Serial.println();
+  //  Serial.println("------------------------------");
+
+  getDate.epochTime = timeClient.getEpochTime() - 7196;
+  getDate.formattedTime = timeClient.getFormattedTime();
+  getDate.currentHour = timeClient.getHours();
+  getDate.currentMinute = timeClient.getMinutes();
+  getDate.currentSecond = timeClient.getSeconds();
+  getDate.weekDayNumber = timeClient.getDay();
+  getDate.weekDay = weekDays[getDate.weekDayNumber];
+  //Get a time structure
+  struct tm *ptm = gmtime ((time_t *)&getDate.epochTime);
+  getDate.monthDay = ptm->tm_mday;
+  getDate.currentMonth = ptm->tm_mon + 1;
+  getDate.currentMonthName = months[getDate.currentMonth - 1];
+  getDate.currentYear = ptm->tm_year + 1900;
+  //Print complete date:
+  getDate.currentDate = String(getDate.currentYear) + "-" + String(getDate.currentMonth) + "-" + String(getDate.monthDay);
+
+  //  Serial.print("Epoch Time: ");
+  //  Serial.println(getDate.epochTime);
+  //  Serial.print("Formatted Time: ");
+  //  Serial.println(getDate.formattedTime);
+  //  Serial.print("Hour: ");
+  //  Serial.println(getDate.currentHour);
+  //  Serial.print("Minutes: ");
+  //  Serial.println(getDate.currentMinute);
+  //  Serial.print("Seconds: ");
+  //  Serial.println(getDate.currentSecond);
+  //  Serial.print("Week Day Number: ");
+  //  Serial.println(getDate.weekDayNumber);
+  //  Serial.print("Week Day: ");
+  //  Serial.println(getDate.weekDay);
+  //  Serial.print("Month day: ");
+  //  Serial.println(getDate.monthDay);
+  //  Serial.print("Month: ");
+  //  Serial.println(getDate.currentMonth);
+  //  Serial.print("Month name: ");
+  //  Serial.println(getDate.currentMonthName);
+  //  Serial.print("Year: ");
+  //  Serial.println(getDate.currentYear);
+  //  Serial.print("Current date: ");
+  //  Serial.println(getDate.currentDate);
+  //
+  //  Serial.println("------------------------------");
+  //  Serial.println();
+}
+
+void analoReadA0() {
+  if (analogRead(A0) > 1020) {
+
+    if (counterAnalogInput > 1000) {
+
+      if (EEPROM.read(EEPROM_ADRESS_CLIENT_OR_ACCESS_POINT) > 0) { //if access point goto client
+        EEPROM.write(EEPROM_ADRESS_CLIENT_OR_ACCESS_POINT, 0); //переходимо в точку доступа
+        checkClientAccessPointRom = 0;
+        comitEprom();
+        ledBlink(5, 300);
+        //        Serial.println("connect to acess point");
+        resetFunc(); //вызываем reset
+      } else {//if client goto access point
+        EEPROM.write(EEPROM_ADRESS_CLIENT_OR_ACCESS_POINT, 255); //переходимо в client
+        checkClientAccessPointRom = 255;
+        comitEprom();
+        Serial.println("connect to client");
+        ledBlink(5, 300);
+        resetFunc(); //вызываем reset
+      }
+
+      EEPROM.write(EEPROM_ADRESS_CLIENT_OR_ACCESS_POINT, 0); //переходимо в точку доступа
+      checkClientAccessPointRom = 0;
+      comitEprom();
+      Serial.println("connect to acess point");
+      resetFunc(); //вызываем reset
+    }
+
+    //        Serial.print(analogRead(A0));
+    //        Serial.print("  --  ");
+    //        Serial.println(counterAnalogInput++);
+    counterAnalogInput++;
+  } else {
+    //        Serial.print(analogRead(A0));
+    //        Serial.print("  --  ");
+    //        Serial.println(counterAnalogInput++);
+    counterAnalogInput = 0;
+  }
+}
+void ledBlink(byte n, int t) {
+  for (byte i = 0; i < n; i++) {
+    pinMode(PIN_LED_KONTROL, INPUT);
+    delay(t);
+    pinMode(PIN_LED_KONTROL, OUTPUT);
+    delay(t);
+  }
+}
+
+String message1 = "RELE";
+String message2 = "-65535-\
+4294967295-65535-99-99-99-99-99-\
+4294967295-65535-99-99-99-99-99-\
+4294967295-65535-99-99-99-99-99-\
+4294967295-65535-99-99-99-99-99-\
+4294967295-65535-99-99-99-99-99-\
+4294967295-65535-99-99-99-99-99-\
+4294967295-65535-99-99-99-99-99-\
+4294967295-65535-99-99-99-99-99-\
+4294967295-65535-99-99-99-99-99-\
+4294967295-65535-99-99-99-99-99-\
+99-99-99-99-99-99-99-99-99-99-\
+99-99-99-99-99-99-99-99-99-99-\
+99-99-99-99-99-99-99-99-99-99-\
+99-99-99-99-99-99-99-99-99-99-\
+99-99-99-99-99-99-99-99-99-99-\
+99-99-99-99-99-99-99-99-99-99-\
+99-99-99-99-99-99-99-99-99-99-\
+99-99-99-99-99-99-99-99-99-99-\
+99-99-99-99-99-99-99-99-99-99-\
+99-99-99-99-99-99-99-99-99-99-\
+1-1-1-1-1-1-1-\
+1-1-1-1-1-1-1-\
+1-1-1-1-1-1-1-\
+1-1-1-1-1-1-1-\
+1-1-1-1-1-1-1-";
+
+void defineDevice() {
+  for (int i = START_SECTION_EEPROM_SSID_AND_PASSWORD; i < LENGTH_SECTION_SSID_ADN_PASSWORD; i++) EEPROM.write(i, 0);
+  for (int i = START_SECTION_EEPROM_TEMP_ON_OFF; i < START_SECTION_EEPROM_TEMP_ON_OFF + 16; i++) EEPROM.write(i, 60);
+  for (int i = START_SECTION_EEPROM_SENSOR_ADDRESS; i < START_SECTION_EEPROM_SENSOR_ADDRESS + 20 * 8; i++) EEPROM.write(i, 0);
+  for (int i = START_SECTION_EEPROM_SENSOR_NAME; i < START_SECTION_EEPROM_SENSOR_NAME + 8 * 20; i++) EEPROM.write(i, 0);
+  for (int i = START_SECTION_EEPROM_RELE_NAME; i < START_SECTION_EEPROM_RELE_NAME + 8 * 20; i++) EEPROM.write(i, 0);
+
+  for (int i = 0; i < 8; i++) {
+    String message = message1 + String(i) + message2;
+    client.publish(nameUser + "_set-rele-data-time", message);
+  }
+  Serial.print("void defineDevice()");
+  comitEprom();
+}
