@@ -3,9 +3,9 @@
 // boolean blockGetMessega = false;
 void callback(const MQTT::Publish &pub) //було
 {
-  // Serial.print(pub.topic()); // выводим в сериал порт название топика
-  // Serial.print(" => ");
-  // Serial.println(pub.payload_string()); // выводим в сериал порт значение полученных данных
+  Serial.print(pub.topic()); // выводим в сериал порт название топика
+  Serial.print(" => ");
+  Serial.println(pub.payload_string()); // выводим в сериал порт значение полученных данных
   String payload = pub.payload_string();
 
   //*************************************************************************************************************************************************

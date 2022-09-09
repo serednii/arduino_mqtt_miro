@@ -38,7 +38,7 @@ int oneWireBus = PIN_DS18B20;
 //const byte PIN_RELE_IN_13 = 12;//
 //const byte PIN_RELE_IN_14 = 14;//
 //const byte PIN_RELE_IN_15 = 15;//
-
+//test
 #else
 #include <WiFi.h> //#include <ESP8266WiFi.h>
 #include <WebServer.h>     
